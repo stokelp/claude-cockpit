@@ -1,0 +1,13 @@
+[project]
+name = "claude-cockpit"
+version = "0.1.0"
+description = "Menu bar cockpit for Claude Code sessions"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 140
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["SIM105", "E501"]  # long lines left are prose inside prompt and AppleScript strings
