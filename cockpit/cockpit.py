@@ -5,6 +5,7 @@ Commands used by the menu bar app:
   serve                   print a JSON snapshot (one per line) whenever something changes
   focus PID               bring the session's terminal tab to the front
   reply PID               type stdin into an idle session and press Enter
+  clear PID               type /clear into an idle session: same tab, fresh conversation
   close PID               end an idle session (SIGTERM to that PID) and close its tab
   hooks-status            print installed, missing or outdated
 
@@ -23,6 +24,7 @@ Every open session lands in one group:
   followups   the judge found the work finished, with concrete items left
   done        the judge found the work finished, worth a look before closing
   close       the judge found nothing left: closing the session loses nothing
+  ready       nothing asked yet (or just cleared): free for the next task
 
 The judge is a short Haiku call through your own `claude` CLI, run once per finished
 turn. Only the Python standard library is used.
@@ -63,7 +65,7 @@ DEFAULT_CONFIG = {
 HOOK_EVENTS = ("Stop", "StopFailure", "Notification")
 HOOK_PATTERN = re.compile(r"cockpit\.py['\"]?\s+hook\b")
 
-GROUPS = ("needs_you", "working", "followups", "done", "close")
+GROUPS = ("needs_you", "working", "followups", "done", "close", "ready")
 VERDICTS = ("needs_you", "followups", "done", "close")
 SUBAGENT_TOOLS = {"Agent", "Task"}
 INTERRUPT_MARKERS = ("[Request interrupted by user", "[Request cancelled")
@@ -669,6 +671,32 @@ on run argv
 end run
 """
 
+    # Keys one by one, as if typed: a pasted "/clear" opens the command menu and Enter
+    # then completes it a second time ("/clear/clear" sent as a message).
+    KEYS = """
+on run argv
+  tell application id "com.mitchellh.ghostty"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with term in terminals of t
+          if id of term is item 1 of argv then
+            repeat with k in (items 2 thru -1 of argv)
+              send key (k as text) to term
+            end repeat
+            delay 0.5
+            send key "enter" to term
+            return "ok"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "missing"
+end run
+"""
+
+    KEY_NAMES = {"/": "slash", " ": "space", "-": "minus"}
+
     CLOSE = """
 on run argv
   tell application id "com.mitchellh.ghostty"
@@ -710,6 +738,12 @@ end run
 
     def type(self, t, text):
         if osascript(self.TYPE, t["term_id"], text) != "ok":
+            raise RuntimeError("Tab not found")
+
+    def command(self, t, command):
+        """Run a slash command such as /clear by typing it."""
+        keys = [self.KEY_NAMES.get(c, c) for c in command]
+        if osascript(self.KEYS, t["term_id"], *keys) != "ok":
             raise RuntimeError("Tab not found")
 
     def close(self, t):
@@ -785,6 +819,14 @@ def reply(pid, text):
         raise RuntimeError("The session is busy")
     t = terminal_for_pid(pid)
     t["adapter"].type(t, text)
+
+
+def clear(pid):
+    """Start a fresh conversation in the same tab (Claude Code's /clear)."""
+    if session_for_pid(pid).get("status") != "idle":
+        raise RuntimeError("The session is busy")
+    t = terminal_for_pid(pid)
+    t["adapter"].command(t, "/clear")
 
 
 def close(pid):
@@ -943,7 +985,7 @@ class Snapshotter:
         elif status != "idle":
             row.update(activity=facts["activity"] or "Thinking", since=facts["turn_start"] or row["since"])
         elif not facts["turn_key"]:
-            row.update(group="done", headline="Nothing asked yet")
+            row.update(group="ready")  # nothing asked yet, or just cleared
         elif state.get("turn_key") == facts["turn_key"]:
             verdict = state.get("verdict") or "done"
             row.update(group=verdict, headline=state.get("headline"), followups=state.get("followups") or [], ask=state.get("ask") or None)
@@ -958,8 +1000,11 @@ class Snapshotter:
                 spawn_judge(sid, path, row["name"], cwd, facts["turn_key"])
 
         idle = status == "idle"
-        row["can_reply"] = idle and bool(term) and row["group"] != "working" and row["kind"] not in ("picker", "plan", "permission")
-        row["can_close"] = idle and row["group"] == "close"
+        row["can_reply"] = (
+            idle and bool(term) and row["group"] in ("needs_you", "followups") and row["kind"] not in ("picker", "plan", "permission")
+        )
+        row["can_clear"] = idle and bool(term) and row["group"] in ("done", "close")
+        row["can_close"] = idle and row["group"] in ("close", "ready")
         return row
 
     def snapshot(self):
@@ -1015,11 +1060,14 @@ def demo_snapshot():
             "headline": None,
             "followups": [],
             "can_reply": False,
+            "can_clear": False,
             "can_close": False,
         }
         r.update(extra)
-        r["can_reply"] = r["status"] == "idle" and r["kind"] not in ("picker", "plan", "permission")
-        r["can_close"] = group == "close"
+        idle = r["status"] == "idle"
+        r["can_reply"] = idle and group in ("needs_you", "followups") and r["kind"] not in ("picker", "plan", "permission")
+        r["can_clear"] = idle and group in ("done", "close")
+        r["can_close"] = idle and group in ("close", "ready")
         return r
 
     rows = [
@@ -1078,6 +1126,7 @@ def demo_snapshot():
             7,
             headline="Export slowed by a missing index on events.created_at; index added and merged",
         ),
+        row("storefront", "storefront", "ready", 300, 8),
     ]
     return {"at": now, "sessions": rows}
 
@@ -1186,7 +1235,7 @@ def main(argv=None):
         sub.add_parser(name)
     sub.add_parser("snapshot").add_argument("--no-judge", action="store_true")
     sub.add_parser("judge").add_argument("session_id")
-    for name in ("focus", "reply", "close"):
+    for name in ("focus", "reply", "clear", "close"):
         sub.add_parser(name).add_argument("pid", type=int)
     internal = sub.add_parser("_judge")
     internal.add_argument("args", nargs=5)
@@ -1212,6 +1261,8 @@ def main(argv=None):
             focus(args.pid)
         elif args.cmd == "reply":
             reply(args.pid, sys.stdin.read())
+        elif args.cmd == "clear":
+            clear(args.pid)
         elif args.cmd == "close":
             close(args.pid)
         elif args.cmd == "hooks-status":

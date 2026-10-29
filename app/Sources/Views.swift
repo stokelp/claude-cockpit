@@ -135,11 +135,8 @@ struct SessionCard: View {
     let session: Session
     let group: SessionGroup
 
-    @State private var replying = false
-    @State private var draft = ""
     @State private var confirmingClose = false
     @State private var hovering = false
-    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -154,8 +151,7 @@ struct SessionCard: View {
             }
             .buttonStyle(.plain)
             .help(session.lastPrompt.map { "Last prompt: \($0)" } ?? "Open the tab")
-            if replying { replyField }
-            if session.canReply || session.canClose { actions }
+            if session.canReply || session.canClear || session.canClose { actions }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -214,6 +210,8 @@ struct SessionCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+        case .ready:
+            EmptyView()
         case .followups, .done, .close:
             VStack(alignment: .leading, spacing: 4) {
                 if let headline = session.headline {
@@ -255,20 +253,6 @@ struct SessionCard: View {
         }
     }
 
-    private var replyField: some View {
-        HStack(spacing: 6) {
-            TextField("Message", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .focused($fieldFocused)
-                .onSubmit(send)
-            Button("Send", action: send)
-                .controlSize(.small)
-                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .onAppear { fieldFocused = true }
-    }
-
     private var actions: some View {
         HStack(spacing: 6) {
             Spacer()
@@ -278,10 +262,10 @@ struct SessionCard: View {
                     .help("Send \"done\" to the session")
                 Button("Retry") { store.reply(session, "retry") }
                     .help("Send \"retry\" to the session")
-                Button(replying ? "Cancel" : "Reply") {
-                    replying.toggle()
-                    if !replying { draft = "" }
-                }
+            }
+            if session.canClear {
+                Button("Clear") { store.clear(session) }
+                    .help("Start a fresh conversation in this tab (/clear)")
             }
             if session.canClose {
                 Button(confirmingClose ? "Confirm close" : "Close") {
@@ -301,14 +285,6 @@ struct SessionCard: View {
         }
         .controlSize(.small)
         .buttonStyle(.bordered)
-    }
-
-    private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        store.reply(session, text)
-        draft = ""
-        replying = false
     }
 }
 

@@ -147,6 +147,24 @@ class Groups(Sandbox):
         self.assertEqual(len(self.spawned), 1)
         self.assertEqual(self.spawned[0][-1], "a1")
 
+    def test_empty_session_is_ready(self):
+        self.write_transcript()
+        self.open_session()
+        row = self.row()
+        self.assertEqual(row["group"], "ready")
+        self.assertTrue(row["can_close"])
+        self.assertFalse(row["can_reply"])
+        self.assertEqual(self.spawned, [])
+
+    def test_done_can_be_cleared(self):
+        self.write_transcript(user("explain the cache"), assistant("a1", text("The cache keys on user id.")))
+        self.open_session()
+        cockpit.save_state(SID, {"turn_key": "a1", "verdict": "done", "headline": "Cache explained"})
+        with mock.patch.object(cockpit, "map_terminals", lambda pids: {os.getpid(): {"tab": 1}}):
+            row = self.row()
+        self.assertTrue(row["can_clear"])
+        self.assertFalse(row["can_close"])
+
     def test_fresh_verdict_sets_the_group(self):
         self.write_transcript(user("explain the cache"), assistant("a1", text("The cache keys on user id.")))
         self.open_session()

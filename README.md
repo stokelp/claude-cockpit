@@ -20,6 +20,7 @@ Running several Claude Code sessions in terminal tabs, it is easy to lose track:
 | **Follow-ups** | The asked work is finished, but concrete items remain, each tagged with who owns it: **You** (merge, deploy, test, decide) or **Claude** (next steps it said it would do). |
 | **Done** | Finished. Worth a look before you close it. |
 | **Safe to close** | Nothing left to review, try, merge or follow up. Closing the session loses nothing. |
+| **Ready** | Nothing asked yet, or just cleared: free for the next task. |
 
 Each card shows the session name, its tab (`⌘3`), the folder and how long ago it changed. The menu bar icon shows how many sessions need you.
 
@@ -28,9 +29,9 @@ Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook
 **Actions** (Ghostty only, see [Terminals](#terminals)):
 
 - Click a card to jump to its tab.
-- **Done** and **Retry** send that word to an idle session in one click, to get it going again after you did your part or after a failure.
-- **Reply** types a message into an idle session and presses Enter.
-- **Close** (on sessions that are safe to close) ends Claude in that tab and closes the tab, after a second click to confirm.
+- **Done** and **Retry** (on Needs you and Follow-ups) send that word to the session in one click, to get it going again after you did your part or after a failure.
+- **Clear** (on Done and Safe to close) runs `/clear` in that tab: same tab, fresh conversation, and the card moves to **Ready**.
+- **Close** (on Safe to close and Ready) ends Claude in that tab and closes the tab, after a second click to confirm.
 
 ## How it works
 
@@ -59,7 +60,7 @@ make install
 
 `make install` builds the app into `~/Applications/Claude Cockpit.app`, adds its hook to `~/.claude/settings.json` (your other settings and hooks are kept, and a backup is written next to the file), and opens it.
 
-The first time you click a card, macOS asks whether Claude Cockpit may control Ghostty. Allow it, or jump, reply and close will not work. You can change it later in System Settings > Privacy & Security > Automation.
+The first time you click a card, macOS asks whether Claude Cockpit may control Ghostty. Allow it, or the card buttons will not work. You can change it later in System Settings > Privacy & Security > Automation.
 
 Sessions started before the install pick up the hook on their next turn. Turn on **Open at login** from the gear menu.
 
@@ -87,7 +88,7 @@ The judge sends the recent part of a finished session (your last prompts, Claude
 
 ## Terminals
 
-Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found and Reply is hidden. Close still ends the Claude process and leaves the tab open.
+Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found, and Done, Retry and Clear are hidden. Close still ends the Claude process and leaves the tab open.
 
 Support for another terminal is one small class in `cockpit.py` (list terminals with their PID or tty, focus one, type into one, close one). Pull requests are welcome.
 

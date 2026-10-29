@@ -82,6 +82,7 @@ final class Store: ObservableObject {
 
     func focus(_ s: Session) { perform(["focus", String(s.pid)], done: nil) }
     func reply(_ s: Session, _ text: String) { perform(["reply", String(s.pid)], input: text, done: "Sent to \(s.name)") }
+    func clear(_ s: Session) { perform(["clear", String(s.pid)], done: "Cleared \(s.name)") }
     func close(_ s: Session) { perform(["close", String(s.pid)], done: "Closed \(s.name)") }
 
     private func perform(_ args: [String], input: String? = nil, done: String?) {

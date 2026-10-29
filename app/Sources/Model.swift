@@ -33,6 +33,7 @@ struct Session: Decodable, Identifiable {
     let headline: String?
     let followups: [Followup]
     let canReply: Bool
+    let canClear: Bool
     let canClose: Bool
 
     var id: String { sid }
@@ -55,6 +56,7 @@ enum SessionGroup: String, CaseIterable, Identifiable {
     case followups
     case done
     case close
+    case ready
 
     var id: String { rawValue }
 
@@ -65,6 +67,7 @@ enum SessionGroup: String, CaseIterable, Identifiable {
         case .followups: "Follow-ups"
         case .done: "Done"
         case .close: "Safe to close"
+        case .ready: "Ready"
         }
     }
 
@@ -75,6 +78,7 @@ enum SessionGroup: String, CaseIterable, Identifiable {
         case .followups: Color(nsColor: .systemYellow)
         case .done: .gray
         case .close: .green
+        case .ready: .teal
         }
     }
 }
