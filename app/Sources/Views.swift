@@ -4,6 +4,13 @@ import SwiftUI
 struct CockpitView: View {
     @EnvironmentObject var store: Store
     var scrolls = true
+    var shortcut: String?
+    @State private var listHeight: CGFloat = 0
+
+    /// The popover sizes itself to its content, so the list needs a definite height.
+    private var maxListHeight: CGFloat {
+        min(700, (NSScreen.main?.visibleFrame.height ?? 800) - 160)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,7 +23,13 @@ struct CockpitView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 90)
             } else if scrolls {
-                ScrollView { groups }.frame(maxHeight: 640)
+                ScrollView {
+                    groups.background(GeometryReader { g in
+                        Color.clear.preference(key: ListHeight.self, value: g.size.height)
+                    })
+                }
+                .frame(height: min(max(listHeight, 60), maxListHeight))
+                .onPreferenceChange(ListHeight.self) { listHeight = $0 }
             } else {
                 groups
             }
@@ -83,6 +96,11 @@ struct CockpitView: View {
         HStack(spacing: 10) {
             if let toast = store.toast, !toast.isEmpty {
                 Text(toast).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            } else if let shortcut {
+                Text(shortcut)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .help("Opens this panel from anywhere")
             }
             Spacer()
             if scrolls { settingsMenu } else { Image(systemName: "gearshape").foregroundStyle(.secondary) }
@@ -289,16 +307,9 @@ struct SessionCard: View {
     }
 }
 
-struct MenuBarLabel: View {
-    @ObservedObject var store: Store
-
-    var body: some View {
-        let count = store.needsYouCount
-        HStack(spacing: 3) {
-            Image(systemName: count > 0 ? "exclamationmark.bubble.fill" : "rectangle.stack")
-            if count > 0 { Text("\(count)") }
-        }
-    }
+private struct ListHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 /// Wraps its children onto as many lines as needed.

@@ -23,6 +23,8 @@ Running several Claude Code sessions in terminal tabs, it is easy to lose track:
 
 Each card shows the session name, its tab (`⌘3`), the folder and how long ago it changed. The menu bar icon shows how many sessions need you.
 
+Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook with a full menu bar, macOS hides the newest icons behind the notch; the shortcut still works, and the panel then opens at the top right of the screen.
+
 **Actions** (Ghostty only, see [Terminals](#terminals)):
 
 - Click a card to jump to its tab.
@@ -36,7 +38,7 @@ Each card shows the session name, its tab (`⌘3`), the folder and how long ago 
 - **The judge**: when a turn ends (`Stop` hook, or the app noticing an idle session that has no verdict yet), a detached `claude -p --model haiku` call reads the session's recent messages and returns a verdict, a one-line headline and the follow-ups. It runs once per finished turn, takes a few seconds, and never blocks the session. Verdicts are stored in `~/.claude/cockpit/state/`.
 - **Terminal tabs** are matched to sessions through Ghostty's AppleScript dictionary, by process ID and then by tty.
 
-The app itself is a small SwiftUI `MenuBarExtra`. The logic lives in [`cockpit/cockpit.py`](cockpit/cockpit.py), a single script that uses only the Python standard library and is bundled inside the app.
+The app itself is a small AppKit status item with a SwiftUI popover. The logic lives in [`cockpit/cockpit.py`](cockpit/cockpit.py), a single script that uses only the Python standard library and is bundled inside the app.
 
 ## Requirements
 

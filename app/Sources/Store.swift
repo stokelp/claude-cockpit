@@ -75,8 +75,6 @@ final class Store: ObservableObject {
         return group == .needsYou ? rows.sorted { ($0.since ?? 0) < ($1.since ?? 0) } : rows
     }
 
-    var needsYouCount: Int { rows(.needsYou).count }
-
     /// Folder labels only help when sessions run from different folders.
     var showsFolders: Bool { Set(sessions.map(\.folder)).count > 1 }
 
