@@ -181,6 +181,13 @@ class Groups(Sandbox):
         self.write_transcript(user("deploy"), assistant("a1", tool_use("t1", "Bash")), tool_result("t1"))
         self.assertEqual(self.row()["group"], "working")
 
+    def test_waiting_status_is_a_permission_prompt(self):
+        self.write_transcript(user("deploy"), assistant("a1", text("Deploying now.")))
+        self.open_session(status="waiting")
+        row = self.row()
+        self.assertEqual((row["group"], row["kind"], row["ask"]), ("needs_you", "permission", "Waiting for your permission"))
+        self.assertFalse(row["can_reply"])
+
 
 class Verdicts(unittest.TestCase):
     def test_unknown_verdict_becomes_done(self):

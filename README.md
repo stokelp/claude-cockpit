@@ -28,13 +28,14 @@ Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook
 **Actions** (Ghostty only, see [Terminals](#terminals)):
 
 - Click a card to jump to its tab.
+- **Done** and **Retry** send that word to an idle session in one click, to get it going again after you did your part or after a failure.
 - **Reply** types a message into an idle session and presses Enter.
 - **Close** (on sessions that are safe to close) ends Claude in that tab and closes the tab, after a second click to confirm.
 
 ## How it works
 
 - **Live state** comes from the files Claude Code keeps for open sessions (`~/.claude/sessions/*.json`) and from the end of each session's transcript. A picker or plan that has no answer yet is detected in the transcript, so it shows up even while Claude Code still reports the session as busy.
-- **Permission prompts** are recorded by a `Notification` hook and cleared as soon as the tool call gets its result.
+- **Permission prompts**: Claude Code marks the session `waiting` while one is on screen. A `Notification` hook also records which tool asked, when the transcript shows it, and clears it as soon as the tool call gets its result.
 - **The judge**: when a turn ends (`Stop` hook, or the app noticing an idle session that has no verdict yet), a detached `claude -p --model haiku` call reads the session's recent messages and returns a verdict, a one-line headline and the follow-ups. It runs once per finished turn, takes a few seconds, and never blocks the session. Verdicts are stored in `~/.claude/cockpit/state/`.
 - **Terminal tabs** are matched to sessions through Ghostty's AppleScript dictionary, by process ID and then by tty.
 

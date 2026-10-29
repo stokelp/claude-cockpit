@@ -95,7 +95,7 @@ struct CockpitView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             if let toast = store.toast, !toast.isEmpty {
-                Text(toast).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Text(toast).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
             } else if let shortcut {
                 Text(shortcut)
                     .font(.system(size: 11))
@@ -273,6 +273,11 @@ struct SessionCard: View {
         HStack(spacing: 6) {
             Spacer()
             if session.canReply {
+                // One-click answers that get the session going again.
+                Button("Done") { store.reply(session, "done") }
+                    .help("Send \"done\" to the session")
+                Button("Retry") { store.reply(session, "retry") }
+                    .help("Send \"retry\" to the session")
                 Button(replying ? "Cancel" : "Reply") {
                     replying.toggle()
                     if !replying { draft = "" }

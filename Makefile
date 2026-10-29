@@ -26,7 +26,9 @@ app: $(SOURCES) app/Info.plist cockpit/cockpit.py
 		$(SOURCES) -o "$(APP)/Contents/MacOS/ClaudeCockpit"
 	cp app/Info.plist "$(APP)/Contents/Info.plist"
 	cp cockpit/cockpit.py "$(APP)/Contents/Resources/cockpit.py"
-	codesign --force --sign - --identifier $(BUNDLE_ID) "$(APP)"
+	# Ad-hoc signatures change with every build. Pinning the designated requirement to the
+	# bundle ID keeps the macOS Automation permission (control Ghostty) across rebuilds.
+	codesign --force --sign - --identifier $(BUNDLE_ID) -r='designated => identifier "$(BUNDLE_ID)"' "$(APP)"
 
 install: app
 	-osascript -e 'tell application id "$(BUNDLE_ID)" to quit' >/dev/null 2>&1

@@ -88,7 +88,11 @@ final class Store: ObservableObject {
         Task {
             let result = await Backend.run(args, input: input)
             if !result.ok {
-                say(result.error.components(separatedBy: "\n").last(where: { !$0.isEmpty }) ?? "Failed")
+                let message = result.error.components(separatedBy: "\n").last(where: { !$0.isEmpty }) ?? "Failed"
+                say(message)
+                if message.contains("Automation"), let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                    NSWorkspace.shared.open(url)
+                }
             } else if let done {
                 say(done)
             }

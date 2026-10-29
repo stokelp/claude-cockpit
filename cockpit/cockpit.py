@@ -570,7 +570,7 @@ def hook():
                 "kind": "permission",
                 "tool_use_id": tool["id"] if tool else None,
                 "tool": tool["name"] if tool else "",
-                "text": describe_tool(tool["name"], tool["input"]) if tool else clip(message, 160),
+                "text": describe_tool(tool["name"], tool["input"]) if tool else "",
                 "size": file_size(path),
                 "subagent_bytes": subagent_bytes(path, sid),
                 "at": time.time(),
@@ -591,9 +591,14 @@ def hook():
 # -------------------------------------------------------------------- terminals
 
 
+NOT_ALLOWED = "Not allowed to control Ghostty. Turn it on in System Settings > Privacy & Security > Automation."
+
+
 def osascript(script, *args, timeout=10):
     result = subprocess.run(["osascript", "-e", script, *map(str, args)], capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
+        if "-1743" in result.stderr:  # errAEEventNotPermitted: the Automation permission is off
+            raise RuntimeError(NOT_ALLOWED)
         raise RuntimeError(result.stderr.strip()[-300:] or f"osascript exit {result.returncode}")
     return result.stdout.strip()
 
@@ -841,6 +846,15 @@ def attention_live(attention, facts, path, sid, status):
     return status != "idle" and file_size(path) == attention.get("size")
 
 
+def attention_text(attention, facts):
+    if attention.get("kind") == "notification":
+        return attention.get("text") or "Waiting for you"
+    # A tool call that waits for approval usually reaches the transcript only once answered.
+    pending = facts["pending"]
+    tool = next((p for p in pending if p["id"] == attention.get("tool_use_id")), None) or (pending[-1] if pending else None)
+    return f"Permission: {describe_tool(tool['name'], tool['input'])}" if tool else "Waiting for your permission"
+
+
 class Snapshotter:
     """Builds snapshots, caching transcript scans until the file changes."""
 
@@ -920,14 +934,12 @@ class Snapshotter:
             row.update(group="needs_you", kind="picker", question=picker_summary(picker), since=picker["ts"] or row["since"])
         elif plan:
             row.update(group="needs_you", kind="plan", ask="A plan is ready for your approval", since=plan["ts"] or row["since"])
-        elif attention_live(attention, facts, path, sid, status):
-            label = "Permission" if attention["kind"] == "permission" else "Notification"
-            row.update(
-                group="needs_you",
-                kind=attention["kind"],
-                ask=f"{label}: {attention.get('text') or ''}".rstrip(": "),
-                since=attention.get("at"),
-            )
+        elif status == "waiting" or attention_live(attention, facts, path, sid, status):
+            # Claude Code marks a session "waiting" while a permission prompt is on screen.
+            attention = attention if attention_live(attention, facts, path, sid, status) else {"kind": "permission"}
+            row.update(group="needs_you", kind=attention["kind"], ask=attention_text(attention, facts))
+            if attention.get("at"):
+                row["since"] = attention["at"]
         elif status != "idle":
             row.update(activity=facts["activity"] or "Thinking", since=facts["turn_start"] or row["since"])
         elif not facts["turn_key"]:
