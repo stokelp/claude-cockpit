@@ -22,7 +22,7 @@ Running several Claude Code sessions in terminal tabs, it is easy to lose track:
 | **Safe to close** | Nothing left to review, try, merge or follow up. Closing the session loses nothing. |
 | **Ready** | Nothing asked yet, or just cleared: free for the next task. |
 
-Each card shows the session name, its tab (`⌘3`), the folder and how long ago it changed. The menu bar icon shows how many sessions need you.
+Each card shows the session name (its first prompt while Claude Code still has a placeholder name like `api-12`), its tab (`⌘3`), the folder and how long ago it changed. The menu bar icon shows how many sessions need you.
 
 Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook with a full menu bar, macOS hides the newest icons behind the notch; the shortcut still works, and the panel then opens at the top right of the screen.
 

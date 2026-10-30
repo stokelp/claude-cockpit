@@ -73,6 +73,7 @@ SUBAGENT_TOOLS = {"Agent", "Task"}
 INTERRUPT_MARKERS = ("[Request interrupted by user", "[Request cancelled")
 
 TAIL_BYTES = 800_000  # transcript tail read for the live state
+HEAD_BYTES = 200_000  # transcript head read for the first prompt
 JUDGE_HEAD_BYTES, JUDGE_TAIL_BYTES = 200_000, 2_500_000
 JUDGE_TIMEOUT = 120
 MAX_CHECKED = 30  # ticked follow-ups remembered per session
@@ -343,6 +344,22 @@ def scan(path):
                 facts["activity"] = "Thinking"
     facts["pending"] = list(pending.values())
     return facts
+
+
+def first_prompt(path):
+    """The session's first typed prompt (slash commands aside), from the head of its transcript."""
+    try:
+        with open(path, "rb") as f:
+            lines = f.read(HEAD_BYTES).splitlines()
+    except OSError:
+        return None
+    for entry in entries(lines):
+        prompt = prompt_text(entry)
+        if prompt and not prompt.startswith("/"):
+            text = clip(re.sub(r"\[(Image|Pasted text) #\d+[^\]]*\]", " ", prompt), 80)
+            if text:
+                return text[0].upper() + text[1:]
+    return None
 
 
 def transcript_path(sid, cwd=""):
@@ -874,7 +891,9 @@ def live_sessions():
             s = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
-        if s.get("kind") == "interactive" and s.get("sessionId") and alive(s.get("pid")):
+        # Since Claude Code 2.1.314, `claude -p` runs (like the judge's) are listed too, as sdk-cli.
+        headless = str(s.get("entrypoint") or "").startswith("sdk")
+        if s.get("kind") == "interactive" and not headless and s.get("sessionId") and alive(s.get("pid")):
             out.append(s)
     return out
 
@@ -923,6 +942,7 @@ class Snapshotter:
         self.judge = judge
         self.paths = {}
         self.scans = {}
+        self.first_prompts = {}
         self.terminals = {}
         self.terminals_at = 0.0
         self.terminals_for = set()
@@ -957,6 +977,18 @@ class Snapshotter:
             self.scans[sid] = cached
         return cached[1], st.st_mtime
 
+    def name(self, s, path, folder):
+        """Claude Code's placeholder name ("folder-26") says nothing: show the first prompt instead."""
+        name = s.get("name") or ""
+        if name and s.get("nameSource") != "derived":
+            return name
+        sid = s["sessionId"]
+        if sid not in self.first_prompts and path:
+            prompt = first_prompt(path)
+            if prompt:
+                self.first_prompts[sid] = prompt
+        return self.first_prompts.get(sid) or name or folder
+
     def row(self, s):
         sid, pid, cwd = s["sessionId"], s["pid"], s.get("cwd") or ""
         if sid not in self.paths or not self.paths[sid]:
@@ -970,7 +1002,7 @@ class Snapshotter:
         row = {
             "pid": pid,
             "sid": sid,
-            "name": s.get("name") or folder,
+            "name": self.name(s, path, folder),
             "folder": folder,
             "cwd": cwd,
             "tab": term.get("tab"),

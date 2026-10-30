@@ -92,8 +92,16 @@ class Sandbox(unittest.TestCase):
         old = time.time() - 60  # settled, so serve may judge it
         os.utime(self.transcript, (old, old))
 
-    def open_session(self, status="idle", name="Demo session"):
-        data = {"pid": os.getpid(), "sessionId": SID, "cwd": "/work", "kind": "interactive", "name": name, "status": status}
+    def open_session(self, status="idle", name="Demo session", name_source="hook"):
+        data = {
+            "pid": os.getpid(),
+            "sessionId": SID,
+            "cwd": "/work",
+            "kind": "interactive",
+            "name": name,
+            "nameSource": name_source,
+            "status": status,
+        }
         (self.paths["SESSIONS_DIR"] / f"{os.getpid()}.json").write_text(json.dumps(data))
 
     def row(self):
@@ -205,6 +213,35 @@ class Groups(Sandbox):
         row = self.row()
         self.assertEqual((row["group"], row["kind"], row["ask"]), ("needs_you", "permission", "Waiting for your permission"))
         self.assertFalse(row["can_reply"])
+
+
+class Names(Sandbox):
+    def test_placeholder_name_shows_the_first_prompt(self):
+        self.write_transcript(
+            user("/model opus"),
+            user("[Image #1] can we turn the follow-ups into a checklist?"),
+            assistant("a1", text("Sure.")),
+            user("and the title?"),
+        )
+        self.open_session(name="work-26", name_source="derived")
+        self.assertEqual(self.row()["name"], "Can we turn the follow-ups into a checklist?")
+
+    def test_placeholder_kept_until_there_is_a_prompt(self):
+        self.write_transcript()
+        self.open_session(name="work-26", name_source="derived")
+        self.assertEqual(self.row()["name"], "work-26")
+
+    def test_headless_runs_are_not_sessions(self):
+        self.write_transcript(user("judge this"))
+        self.open_session(name="cockpit-29", name_source="derived")
+        f = self.paths["SESSIONS_DIR"] / f"{os.getpid()}.json"
+        f.write_text(json.dumps({**json.loads(f.read_text()), "entrypoint": "sdk-cli"}))
+        self.assertEqual(cockpit.Snapshotter().snapshot()["sessions"], [])
+
+    def test_real_name_wins(self):
+        self.write_transcript(user("fix the login bug"))
+        self.open_session(name="Login bug", name_source="hook")
+        self.assertEqual(self.row()["name"], "Login bug")
 
 
 class Checklist(Sandbox):
