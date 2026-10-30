@@ -72,9 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func show(activate: Bool) {
         autoOpened = !activate
         if activate { NSApp.activate(ignoringOtherApps: true) }
-        if let button = item.button, iconIsVisible(button) {
+        // Opened by itself, it goes to the main display (the one macOS gives the menu bar to).
+        let main = activate ? nil : NSScreen.screens.first
+        if let button = item.button, iconIsVisible(button), main == nil || button.window?.screen == main {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        } else if let view = fallbackAnchor().contentView {
+        } else if let view = fallbackAnchor(on: main).contentView {
             popover.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
         }
         guard let window = popover.contentViewController?.view.window else { return }
@@ -120,11 +122,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return window.occlusionState.contains(.visible) && screen.frame.contains(frame)
     }
 
-    /// An invisible point near the top right corner for the panel to hang from.
-    private func fallbackAnchor() -> NSWindow {
-        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+    /// An invisible point under the menu bar for the panel to hang from: below the icon's spot
+    /// when the icon shows on another display, else near the top right corner.
+    private func fallbackAnchor(on target: NSScreen? = nil) -> NSWindow {
+        let screen = target ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         let visible = screen.visibleFrame
-        let frame = NSRect(x: visible.maxX - 260, y: visible.maxY - 2, width: 1, height: 1)
+        var x = visible.maxX - 260
+        // Menu bar icons sit at the same distance from the right edge on every display.
+        if let button = item.button, let icon = button.window, let home = icon.screen, home != screen, iconIsVisible(button) {
+            x = min(max(screen.frame.maxX - (home.frame.maxX - icon.frame.midX), visible.minX + 20), visible.maxX - 20)
+        }
+        let frame = NSRect(x: x, y: visible.maxY - 2, width: 1, height: 1)
         let window = anchor ?? {
             let w = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
             w.isOpaque = false
