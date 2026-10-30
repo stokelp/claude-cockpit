@@ -1055,9 +1055,7 @@ class Snapshotter:
                 spawn_judge(sid, path, row["name"], cwd, facts["turn_key"])
 
         idle = status == "idle"
-        row["can_reply"] = (
-            idle and bool(term) and row["group"] in ("needs_you", "followups") and row["kind"] not in ("picker", "plan", "permission")
-        )
+        row["can_reply"] = idle and bool(term) and replyable(row)
         row["can_clear"] = idle and bool(term) and row["group"] in ("done", "close")
         row["can_close"] = idle and row["group"] in ("close", "ready")
         return row
@@ -1068,6 +1066,13 @@ class Snapshotter:
         rows = [self.row(s) for s in sessions]
         rows.sort(key=lambda r: -(r["since"] or 0))
         return {"at": time.time(), "sessions": rows}
+
+
+def replyable(row):
+    """Typing into the session makes sense: Claude asked something, or there is a checklist to report on."""
+    if row["kind"] in ("picker", "plan", "permission"):
+        return False
+    return row["group"] in ("needs_you", "followups") or (bool(row["followups"]) and row["group"] in ("done", "close"))
 
 
 def serve():
@@ -1120,7 +1125,7 @@ def demo_snapshot():
         }
         r.update(extra)
         idle = r["status"] == "idle"
-        r["can_reply"] = idle and group in ("needs_you", "followups") and r["kind"] not in ("picker", "plan", "permission")
+        r["can_reply"] = idle and replyable(r)
         r["can_clear"] = idle and group in ("done", "close")
         r["can_close"] = idle and group in ("close", "ready")
         return r

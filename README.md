@@ -30,7 +30,8 @@ Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook
 
 - Click a card to jump to its tab.
 - Tick a follow-up once it is done. Ticks are kept across restarts and new turns, and the judge is told about them, so it does not list them again. When every item is ticked, the card moves to **Safe to close**.
-- **Done** and **Retry** (on Needs you and Follow-ups) send that word to the session in one click, to get it going again after you did your part or after a failure.
+- **Tell Claude** (on cards with follow-ups) sends the ticked items to the session in one line, such as `Done: Merge PR #482; Raise the size limit.`
+- **Continue** (on Needs you) sends `continue`, to get the session going again after you did your part or after a failure.
 - **Clear** (on Done and Safe to close) runs `/clear` in that tab: same tab, fresh conversation, and the card moves to **Ready**.
 - **Close** (on Safe to close and Ready) ends Claude in that tab and closes the tab, after a second click to confirm.
 
@@ -89,7 +90,7 @@ The judge sends the recent part of a finished session (your last prompts, Claude
 
 ## Terminals
 
-Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found, and Done, Retry and Clear are hidden. Close still ends the Claude process and leaves the tab open.
+Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found, and Tell Claude, Continue and Clear are hidden. Close still ends the Claude process and leaves the tab open.
 
 Support for another terminal is one small class in `cockpit.py` (list terminals with their PID or tty, focus one, type into one, close one). Pull requests are welcome.
 

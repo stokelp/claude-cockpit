@@ -266,9 +266,11 @@ class Checklist(Sandbox):
         self.judged()
         for item in self.FOLLOWUPS:
             cockpit.set_checked(SID, item["text"], True)
-        row = self.row()
+        with mock.patch.object(cockpit, "map_terminals", lambda pids: {os.getpid(): {"tab": 1}}):
+            row = self.row()
         self.assertEqual(row["group"], "close")
         self.assertTrue(row["can_close"])
+        self.assertTrue(row["can_reply"])  # still lets you tell Claude what you did
 
     def test_ticks_survive_a_new_verdict_and_reach_the_judge(self):
         self.judged()

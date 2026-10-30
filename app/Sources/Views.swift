@@ -137,6 +137,7 @@ struct SessionCard: View {
 
     @State private var confirmingClose = false
     @State private var hovering = false
+    @State private var showMissingTicks = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -230,10 +231,11 @@ struct SessionCard: View {
             ForEach(session.followups, id: \.text) { item in
                 let checked = store.isChecked(session, item)
                 Button { store.toggle(session, item) } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Image(systemName: checked ? "checkmark.square.fill" : "square")
-                            .font(.system(size: 12))
-                            .foregroundStyle(checked ? Color.secondary : Color.primary.opacity(0.55))
+                            .font(.system(size: 17))
+                            .foregroundStyle(checked ? Color.secondary : (showMissingTicks ? Color.orange : Color.primary.opacity(0.55)))
+                            .frame(width: 20)
                         Text(item.who == "claude" ? "Claude" : "You")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(checked || item.who == "claude" ? Color.secondary : Color.primary)
@@ -245,13 +247,29 @@ struct SessionCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
-                    .padding(.vertical, 1)
+                    .padding(.vertical, 2)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(checked ? "Mark as not done" : "Mark as done")
             }
         }
+    }
+
+    /// One line ("Done: a; b.") so typing it into the terminal cannot submit half of it.
+    private func tellTicked() {
+        let ticked = session.followups.filter { store.isChecked(session, $0) }
+        guard !ticked.isEmpty else {
+            showMissingTicks = true
+            store.say("Nothing ticked")
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                showMissingTicks = false
+            }
+            return
+        }
+        let items = ticked.map { $0.text.trimmingCharacters(in: CharacterSet(charactersIn: " .;")) }
+        store.reply(session, "Done: " + items.joined(separator: "; ") + ".")
     }
 
     private func picker(_ q: Question) -> some View {
@@ -278,11 +296,13 @@ struct SessionCard: View {
         HStack(spacing: 6) {
             Spacer()
             if session.canReply {
-                // One-click answers that get the session going again.
-                Button("Done") { store.reply(session, "done") }
-                    .help("Send \"done\" to the session")
-                Button("Retry") { store.reply(session, "retry") }
-                    .help("Send \"retry\" to the session")
+                if hasChecklist {
+                    Button("Tell Claude") { tellTicked() }
+                        .help("Send the ticked items to the session")
+                } else {
+                    Button("Continue") { store.reply(session, "continue") }
+                        .help("Send \"continue\" to the session")
+                }
             }
             if session.canClear {
                 Button("Clear") { store.clear(session) }
