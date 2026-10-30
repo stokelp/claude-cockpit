@@ -90,6 +90,7 @@ Optional, in `~/.claude/cockpit/config.json`:
 - `judge`: `false` turns the model calls off. Finished sessions then all land in **Done**; pickers, permission prompts and running turns still work.
 - `judge_model`: any model name `claude --model` accepts.
 - `language`: the language of headlines and follow-ups.
+- `auto_restart_ghostty`: `false` stops Ghostty from restarting by itself after a Claude Code update (see [Ghostty restarts](#ghostty-restarts)). The banner and the menu item stay.
 
 If you use `CLAUDE_CONFIG_DIR`, the hook follows it. The app only sees it if it is set for GUI apps too (`launchctl setenv CLAUDE_CONFIG_DIR ...`).
 
@@ -102,6 +103,25 @@ The judge sends the recent part of a finished session (your last prompts, Claude
 Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found, and Tell Claude, Continue and Clear are hidden. Close still ends the Claude process and leaves the tab open.
 
 Support for another terminal is one small class in `cockpit.py` (list terminals with their PID or tty, focus one, type into one, close one, tell which one is in front). Pull requests are welcome.
+
+## Ghostty restarts
+
+macOS grants `~/Documents` (and Desktop, Downloads) to Ghostty, but it checks each process that reads those folders. When a program still running in a tab has its file deleted, for example when `brew upgrade` replaces Claude Code under an open session, macOS can no longer identify that process. tccd logs `Failed to create Attribution Chain`, and from then on every process in Ghostty gets `Operation not permitted` until Ghostty relaunches, while System Settings still shows Ghostty allowed.
+
+The app watches for that state: a process under Ghostty whose program file is gone.
+
+- **Claude Code (or Ghostty) replaced**: Ghostty restarts by itself once every Claude session in it is idle (nothing running, no picker, plan or permission prompt) and you have left the keyboard for a minute. A banner says what it waits for.
+- **Another program replaced** (a reinstall swapping `node_modules/.bin/turbo` under a running `turbo dev`): it only warns. Restarting that program is enough, and a Ghostty restart would stop your dev servers.
+
+A restart ends the Claude sessions in Ghostty, quits it, reopens it fresh and rebuilds every window, tab and split in the same folder. Tabs that ran Claude type `claude <same flags> --resume <session id>`, plus a prompt telling it to continue when the restart stopped it mid-turn. The `ANTHROPIC_*` and `CLAUDE_CODE_*` variables the session started with (an alias that points Claude elsewhere, say) are passed as tab environment, never typed or written to disk; Claude Code's own session markers are not, and Ghostty is opened with the environment the Dock would give it. Other programs are not restarted: their tab comes back as a shell. Splits come back side by side.
+
+Restart by hand with **Restart Ghostty** on the banner, **Restart Ghostty, resume sessions** in the gear menu, or from any terminal:
+
+```sh
+python3 ~/Applications/Claude\ Cockpit.app/Contents/Resources/cockpit.py restart-ghostty [--force]
+```
+
+From a Ghostty tab, the command asks the running app to do it, since Ghostty takes its tabs down with it. `--force` restarts even while sessions are working. If a restart fails halfway, `restart-ghostty --restore` rebuilds the saved tabs (`~/.claude/cockpit/ghostty-restart-plan.json`).
 
 ## Command line
 

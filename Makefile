@@ -19,13 +19,14 @@ PYTHON     := $(shell for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 
 
 all: app
 
-app: $(SOURCES) app/Info.plist cockpit/cockpit.py
+app: $(SOURCES) app/Info.plist cockpit/cockpit.py cockpit/restart.py
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	xcrun swiftc -parse-as-library -swift-version 5 -O -target $(ARCH)-apple-macos14.0 \
 		$(SOURCES) -o "$(APP)/Contents/MacOS/ClaudeCockpit"
 	cp app/Info.plist "$(APP)/Contents/Info.plist"
 	cp cockpit/cockpit.py "$(APP)/Contents/Resources/cockpit.py"
+	cp cockpit/restart.py "$(APP)/Contents/Resources/restart.py"
 	# Ad-hoc signatures change with every build. Pinning the designated requirement to the
 	# bundle ID keeps the macOS Automation permission (control Ghostty) across rebuilds.
 	codesign --force --sign - --identifier $(BUNDLE_ID) -r='designated => identifier "$(BUNDLE_ID)"' "$(APP)"
@@ -36,7 +37,10 @@ install: app
 	rm -rf "$(DEST)"
 	ditto "$(APP)" "$(DEST)"
 	$(PYTHON) "$(DEST)/Contents/Resources/cockpit.py" install-hooks
-	open "$(DEST)"
+	# `open` hands this shell's environment to the app. Run from a Claude session, that includes
+	# its child-session markers, so open the app with what the Dock would give it.
+	env -i HOME="$$HOME" USER="$$USER" LOGNAME="$$LOGNAME" SHELL="$$SHELL" TMPDIR="$$TMPDIR" \
+		PATH=/usr/bin:/bin:/usr/sbin:/sbin open "$(DEST)"
 
 uninstall:
 	-[ -f "$(DEST)/Contents/Resources/cockpit.py" ] && $(PYTHON) "$(DEST)/Contents/Resources/cockpit.py" uninstall-hooks

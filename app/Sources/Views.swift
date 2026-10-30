@@ -6,6 +6,7 @@ struct CockpitView: View {
     var scrolls = true
     var shortcut: String?
     @State private var listHeight: CGFloat = 0
+    @State private var confirmingRestart = false
 
     /// The popover sizes itself to its content, so the list needs a definite height.
     private var maxListHeight: CGFloat {
@@ -17,6 +18,7 @@ struct CockpitView: View {
             header
             Divider()
             if store.hooks != "installed" { hooksBar; Divider() }
+            if let ghostty = store.ghostty, !ghostty.stale.isEmpty || ghostty.restarting { ghosttyBar(ghostty); Divider() }
             if store.sessions.isEmpty {
                 Text(store.connected ? "No Claude Code sessions open" : "Starting…")
                     .font(.system(size: 12))
@@ -71,6 +73,47 @@ struct CockpitView: View {
         .padding(.vertical, 8)
     }
 
+    /// A program was replaced on disk while running in Ghostty: macOS will soon refuse Ghostty
+    /// access to Documents, until Ghostty restarts.
+    private func ghosttyBar(_ g: GhosttyStatus) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: g.restarting ? "arrow.clockwise" : "exclamationmark.triangle.fill")
+                .foregroundStyle(g.restarting ? Color.secondary : Color.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(g.restarting ? "Restarting Ghostty…" : "\(g.stale.joined(separator: ", ")) was updated while running in Ghostty")
+                    .font(.system(size: 12))
+                if !g.restarting {
+                    Text(g.auto
+                        ? "Ghostty restarts by itself, sessions resumed. \(g.waiting ?? "Starting")."
+                        : "Restart that program or Ghostty soon, or Ghostty loses access to Documents.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            if !g.restarting {
+                Button(confirmingRestart ? "Confirm restart" : "Restart Ghostty") {
+                    if confirmingRestart {
+                        confirmingRestart = false
+                        store.restartGhostty(force: true)
+                    } else {
+                        confirmingRestart = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 4_000_000_000)
+                            confirmingRestart = false
+                        }
+                    }
+                }
+                .controlSize(.small)
+                .tint(confirmingRestart ? .red : nil)
+                .help("Ends what runs in Ghostty's tabs, then reopens them in the same folders with Claude sessions resumed")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
     private var groups: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(SessionGroup.allCases) { group in
@@ -114,6 +157,8 @@ struct CockpitView: View {
         Menu {
             Toggle("Open when a session needs you", isOn: $store.popsUp)
             Toggle("Open at login", isOn: Binding(get: { store.openAtLogin }, set: { _ in store.toggleOpenAtLogin() }))
+            Divider()
+            Button("Restart Ghostty, resume sessions") { store.restartGhostty(force: false) }
             Divider()
             if store.hooks == "installed" {
                 Button("Remove Claude Code hooks") { store.removeHooks() }

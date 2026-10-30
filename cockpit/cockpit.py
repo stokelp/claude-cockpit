@@ -10,6 +10,9 @@ Commands used by the menu bar app:
   close PID               end an idle session (SIGTERM to that PID) and close its tab
   check SESSION_ID        tick the follow-up whose text is on stdin (uncheck: untick it)
   hooks-status            print installed, missing or outdated
+  restart-ghostty         restart Ghostty, tabs restored and Claude sessions resumed (see
+                          restart.py); --force even while sessions work, --restore rebuilds
+                          the tabs of the last restart. From a Ghostty tab it asks `serve`.
 
 Setup and debugging:
   hook                    Claude Code hook entry point (Stop, StopFailure, Notification)
@@ -63,7 +66,27 @@ DEFAULT_CONFIG = {
     "judge": True,  # False: no model calls, finished sessions land in "done"
     "judge_model": "haiku",
     "language": "English",  # language of headlines and follow-ups
+    "auto_restart_ghostty": True,  # restart Ghostty by itself once Claude Code was replaced under it
 }
+
+# Set by Claude Code in the processes it starts. Inherited (the app launched from a Claude Bash
+# tool, say), they make every claude started below a child session: no transcript saved, no
+# ~/.claude/sessions entry. main() drops them, so neither the judge nor Ghostty inherits them.
+CLAUDE_INTERNAL_ENV = (
+    "CLAUDECODE",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+    "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",
+)
 
 HOOK_EVENTS = ("Stop", "StopFailure", "Notification")
 HOOK_PATTERN = re.compile(r"cockpit\.py['\"]?\s+hook\b")
@@ -1106,8 +1129,11 @@ def replyable(row):
 
 def serve():
     """One JSON line per change (and a heartbeat), until stdout closes."""
+    import restart  # bundled next to this script
+
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     snapshotter = Snapshotter(judge=True)
+    watcher = restart.Watcher()
     last_body, last_sent = None, 0.0
     while True:
         try:
@@ -1116,7 +1142,12 @@ def serve():
             log(f"snapshot failed: {exc!r}")
             time.sleep(TICK)
             continue
-        body = json.dumps(snap["sessions"], sort_keys=True)
+        try:
+            snap["ghostty"] = watcher.tick(snap["sessions"])
+        except Exception as exc:  # noqa: BLE001 - keep serving
+            log(f"ghostty watch failed: {exc!r}")
+            snap["ghostty"] = None
+        body = json.dumps([snap["sessions"], snap["ghostty"]], sort_keys=True)
         if body != last_body or time.time() - last_sent >= HEARTBEAT:
             sys.stdout.write(json.dumps(snap, ensure_ascii=False) + "\n")
             sys.stdout.flush()
@@ -1319,6 +1350,8 @@ def judge_now(prefix):
 
 
 def main(argv=None):
+    for key in CLAUDE_INTERNAL_ENV:
+        os.environ.pop(key, None)
     parser = argparse.ArgumentParser(prog="cockpit.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("serve", "hook", "install-hooks", "uninstall-hooks", "hooks-status", "demo", "focused"):
@@ -1329,6 +1362,9 @@ def main(argv=None):
         sub.add_parser(name).add_argument("session_id")
     for name in ("focus", "reply", "clear", "close"):
         sub.add_parser(name).add_argument("pid", type=int)
+    ghostty = sub.add_parser("restart-ghostty")
+    for flag in ("--force", "--auto", "--restore"):
+        ghostty.add_argument(flag, action="store_true")
     internal = sub.add_parser("_judge")
     internal.add_argument("args", nargs=5)
     args = parser.parse_args(argv)
@@ -1359,6 +1395,10 @@ def main(argv=None):
             clear(args.pid)
         elif args.cmd == "close":
             close(args.pid)
+        elif args.cmd == "restart-ghostty":
+            import restart
+
+            print(restart.command(force=args.force, auto=args.auto, restore_saved=args.restore))
         elif args.cmd in ("check", "uncheck"):
             set_checked(args.session_id, sys.stdin.read(), args.cmd == "check")
         elif args.cmd == "hooks-status":

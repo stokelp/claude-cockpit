@@ -40,9 +40,18 @@ struct Session: Decodable, Identifiable {
     var id: String { sid }
 }
 
+/// Programs replaced on disk while running under Ghostty, and the restart that clears them.
+struct GhosttyStatus: Decodable, Equatable {
+    let stale: [String]
+    let auto: Bool
+    let waiting: String?
+    let restarting: Bool
+}
+
 struct Snapshot: Decodable {
     let at: Double
     let sessions: [Session]
+    let ghostty: GhosttyStatus?
 
     static func decode(_ data: Data) -> Snapshot? {
         let decoder = JSONDecoder()

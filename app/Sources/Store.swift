@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class Store: ObservableObject {
     @Published private(set) var sessions: [Session] = []
+    @Published private(set) var ghostty: GhosttyStatus?
     @Published private(set) var connected = false
     @Published private(set) var hooks = "installed"
     @Published private(set) var openAtLogin = SMAppService.mainApp.status == .enabled
@@ -71,6 +72,7 @@ final class Store: ObservableObject {
 
     func show(_ snapshot: Snapshot) {
         sessions = snapshot.sessions
+        if ghostty != snapshot.ghostty { ghostty = snapshot.ghostty }
         for s in sessions {
             for item in s.followups where ticks[tickKey(s, item)] == (item.done ?? false) {
                 ticks[tickKey(s, item)] = nil
@@ -95,6 +97,19 @@ final class Store: ObservableObject {
     func reply(_ s: Session, _ text: String) { perform(["reply", String(s.pid)], input: text, done: "Sent to \(s.name)") }
     func clear(_ s: Session) { perform(["clear", String(s.pid)], done: "Cleared \(s.name)") }
     func close(_ s: Session) { perform(["close", String(s.pid)], done: "Closed \(s.name)") }
+
+    /// Quits and reopens Ghostty: tabs come back in their folders, Claude sessions resumed.
+    func restartGhostty(force: Bool) {
+        say("Restarting Ghostty…")
+        Task {
+            let result = await Backend.run(["restart-ghostty"] + (force ? ["--force"] : []))
+            let error = result.error.components(separatedBy: "\n").last(where: { !$0.isEmpty }) ?? "Ghostty restart failed"
+            say(result.ok ? result.output : error)
+            if !result.ok, error.contains("Automation"), let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
 
     private func tickKey(_ s: Session, _ item: Followup) -> String { s.sid + "\n" + item.text }
 
