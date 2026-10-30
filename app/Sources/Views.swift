@@ -151,6 +151,7 @@ struct SessionCard: View {
             }
             .buttonStyle(.plain)
             .help(session.lastPrompt.map { "Last prompt: \($0)" } ?? "Open the tab")
+            if hasChecklist { checklist }
             if session.canReply || session.canClear || session.canClose { actions }
         }
         .padding(.horizontal, 10)
@@ -213,22 +214,42 @@ struct SessionCard: View {
         case .ready:
             EmptyView()
         case .followups, .done, .close:
-            VStack(alignment: .leading, spacing: 4) {
-                if let headline = session.headline {
-                    Text(headline).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
-                }
-                ForEach(session.followups, id: \.self) { item in
+            if let headline = session.headline {
+                Text(headline).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var hasChecklist: Bool {
+        !session.followups.isEmpty && [.followups, .done, .close].contains(group)
+    }
+
+    /// Follow-ups as a checklist. Outside the card's button, so a tick does not open the tab.
+    private var checklist: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(session.followups, id: \.text) { item in
+                let checked = store.isChecked(session, item)
+                Button { store.toggle(session, item) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: checked ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 12))
+                            .foregroundStyle(checked ? Color.secondary : Color.primary.opacity(0.55))
                         Text(item.who == "claude" ? "Claude" : "You")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(item.who == "claude" ? Color.secondary : Color.primary)
+                            .foregroundStyle(checked || item.who == "claude" ? Color.secondary : Color.primary)
                             .frame(width: 38, alignment: .leading)
                         Text(item.text)
                             .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
+                            .strikethrough(checked)
+                            .foregroundStyle(checked ? .tertiary : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
                     }
+                    .padding(.vertical, 1)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .help(checked ? "Mark as not done" : "Mark as done")
             }
         }
     }

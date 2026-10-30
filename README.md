@@ -17,7 +17,7 @@ Running several Claude Code sessions in terminal tabs, it is easy to lose track:
 |---|---|
 | **Needs you** | A question picker, a plan or a permission prompt is waiting, or Claude's last message asks you something it cannot go on without. Pickers show the question and their options. |
 | **In progress** | A turn is running. Shows what Claude is doing right now (the command, the file being edited, the subagent). |
-| **Follow-ups** | The asked work is finished, but concrete items remain, each tagged with who owns it: **You** (merge, deploy, test, decide) or **Claude** (next steps it said it would do). |
+| **Follow-ups** | The asked work is finished, but concrete items remain, as a checklist. Each item is tagged with who owns it: **You** (merge, deploy, test, decide) or **Claude** (next steps it said it would do). |
 | **Done** | Finished. Worth a look before you close it. |
 | **Safe to close** | Nothing left to review, try, merge or follow up. Closing the session loses nothing. |
 | **Ready** | Nothing asked yet, or just cleared: free for the next task. |
@@ -29,6 +29,7 @@ Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook
 **Actions** (Ghostty only, see [Terminals](#terminals)):
 
 - Click a card to jump to its tab.
+- Tick a follow-up once it is done. Ticks are kept across restarts and new turns, and the judge is told about them, so it does not list them again. When every item is ticked, the card moves to **Safe to close**.
 - **Done** and **Retry** (on Needs you and Follow-ups) send that word to the session in one click, to get it going again after you did your part or after a failure.
 - **Clear** (on Done and Safe to close) runs `/clear` in that tab: same tab, fresh conversation, and the card moves to **Ready**.
 - **Close** (on Safe to close and Ready) ends Claude in that tab and closes the tab, after a second click to confirm.

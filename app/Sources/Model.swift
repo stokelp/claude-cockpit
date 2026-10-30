@@ -12,6 +12,7 @@ struct Question: Decodable {
 struct Followup: Decodable, Hashable {
     let who: String
     let text: String
+    let done: Bool?
 }
 
 /// One open Claude Code session, as described by `cockpit.py serve`.

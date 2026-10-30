@@ -10,6 +10,8 @@ final class Store: ObservableObject {
     @Published private(set) var openAtLogin = SMAppService.mainApp.status == .enabled
     @Published var toast: String?
     @Published var now = Date()
+    /// Ticks clicked but not yet in a snapshot, so the box does not flicker back.
+    @Published private var ticks: [String: Bool] = [:]
 
     private var server: Process?
     private var buffer = Data()
@@ -65,6 +67,11 @@ final class Store: ObservableObject {
 
     func show(_ snapshot: Snapshot) {
         sessions = snapshot.sessions
+        for s in sessions {
+            for item in s.followups where ticks[tickKey(s, item)] == (item.done ?? false) {
+                ticks[tickKey(s, item)] = nil
+            }
+        }
         connected = true
         now = Date()
     }
@@ -84,6 +91,23 @@ final class Store: ObservableObject {
     func reply(_ s: Session, _ text: String) { perform(["reply", String(s.pid)], input: text, done: "Sent to \(s.name)") }
     func clear(_ s: Session) { perform(["clear", String(s.pid)], done: "Cleared \(s.name)") }
     func close(_ s: Session) { perform(["close", String(s.pid)], done: "Closed \(s.name)") }
+
+    private func tickKey(_ s: Session, _ item: Followup) -> String { s.sid + "\n" + item.text }
+
+    func isChecked(_ s: Session, _ item: Followup) -> Bool { ticks[tickKey(s, item)] ?? item.done ?? false }
+
+    func toggle(_ s: Session, _ item: Followup) {
+        let key = tickKey(s, item)
+        let done = !isChecked(s, item)
+        ticks[key] = done
+        Task {
+            let result = await Backend.run([done ? "check" : "uncheck", s.sid], input: item.text)
+            if !result.ok {
+                ticks[key] = nil
+                say(result.error.isEmpty ? "Could not save the tick" : result.error)
+            }
+        }
+    }
 
     private func perform(_ args: [String], input: String? = nil, done: String?) {
         Task {

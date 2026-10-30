@@ -7,6 +7,7 @@ Commands used by the menu bar app:
   reply PID               type stdin into an idle session and press Enter
   clear PID               type /clear into an idle session: same tab, fresh conversation
   close PID               end an idle session (SIGTERM to that PID) and close its tab
+  check SESSION_ID        tick the follow-up whose text is on stdin (uncheck: untick it)
   hooks-status            print installed, missing or outdated
 
 Setup and debugging:
@@ -21,7 +22,8 @@ Every open session lands in one group:
   needs_you   a question picker, a plan or a permission prompt is waiting, or the
               judge found that Claude asked something it cannot go on without
   working     a turn is running
-  followups   the judge found the work finished, with concrete items left
+  followups   the judge found the work finished, with concrete items left (a checklist:
+              once you tick every item, the session moves to close)
   done        the judge found the work finished, worth a look before closing
   close       the judge found nothing left: closing the session loses nothing
   ready       nothing asked yet (or just cleared): free for the next task
@@ -73,6 +75,7 @@ INTERRUPT_MARKERS = ("[Request interrupted by user", "[Request cancelled")
 TAIL_BYTES = 800_000  # transcript tail read for the live state
 JUDGE_HEAD_BYTES, JUDGE_TAIL_BYTES = 200_000, 2_500_000
 JUDGE_TIMEOUT = 120
+MAX_CHECKED = 30  # ticked follow-ups remembered per session
 STALE_LOCK = 180  # a judge still marked running after this many seconds is dead
 RETRY_AFTER = 120  # seconds before retrying a failed judge
 SETTLE = 2.0  # serve waits this long after the last transcript write before judging
@@ -180,6 +183,19 @@ def load_state(sid):
 
 def save_state(sid, state):
     write_json_atomic(state_file(sid), state)
+
+
+def set_checked(sid, text, done):
+    """Tick or untick one follow-up. Ticks are kept by text, so they survive a new verdict."""
+    text = text.strip()
+    if not safe_id(sid) or not text:
+        raise RuntimeError("Need a session id and the follow-up text")
+    state = load_state(sid)
+    checked = [t for t in state.get("checked") or [] if t != text]
+    if done:
+        checked.append(text)
+    state["checked"] = checked[-MAX_CHECKED:]
+    save_state(sid, state)
 
 
 # ------------------------------------------------------------------- transcripts
@@ -355,12 +371,12 @@ verdict, exactly one of:
 
 headline: one sentence of at most 100 characters saying what this session achieved or where it stands. Be specific: name the feature, ticket, file or metric. Plain words, no filler like "Claude has".
 ask: for "needs_you" only, the question or decision waiting on the developer, at most 160 characters. Otherwise "".
-followups: for "followups" (optionally "done"), up to 5 concrete items of at most 100 characters each. who is "you" when the developer must act, "claude" when Claude said it would do it or offered to. Empty list for "close".
+followups: for "followups" (optionally "done"), up to 5 concrete items of at most 100 characters each. who is "you" when the developer must act, "claude" when Claude said it would do it or offered to. Empty list for "close". Follow-ups the developer already ticked off are done: leave them out, and if nothing else remains, the verdict is not "followups".
 
 Write the headline, ask and followups in {language}. Never use the characters "—" or "–"."""
 
 
-def judge_context(path, name, cwd):
+def judge_context(path, name, cwd, checked=()):
     prompts, replies, actions = [], [], []
     interrupted = False
     for entry in entries(read_head_and_tail(path, JUDGE_HEAD_BYTES, JUDGE_TAIL_BYTES)):
@@ -398,6 +414,9 @@ def judge_context(path, name, cwd):
         lines.append(replies[-1][-6000:])
     if interrupted:
         lines.append("The developer interrupted the last turn before it finished.")
+    if checked:
+        lines.append("Follow-ups the developer already ticked off as done:")
+        lines += [f"- {clip(t, 140)}" for t in checked[-10:]]
     return "\n".join(lines)
 
 
@@ -519,7 +538,7 @@ def run_judge(sid, path, name, cwd, turn_key):
     try:
         time.sleep(1.0)  # let the final message land in the transcript
         turn_key = scan(path)["turn_key"] or turn_key
-        context = judge_context(path, name, cwd)
+        context = judge_context(path, name, cwd, load_state(sid).get("checked") or [])
         if not context:
             return
         verdict = clean_verdict(ask_model(context, config()))
@@ -988,7 +1007,11 @@ class Snapshotter:
             row.update(group="ready")  # nothing asked yet, or just cleared
         elif state.get("turn_key") == facts["turn_key"]:
             verdict = state.get("verdict") or "done"
-            row.update(group=verdict, headline=state.get("headline"), followups=state.get("followups") or [], ask=state.get("ask") or None)
+            checked = set(state.get("checked") or [])
+            followups = [{**f, "done": f["text"] in checked} for f in state.get("followups") or []]
+            if verdict == "followups" and followups and all(f["done"] for f in followups):
+                verdict = "close"  # every item ticked: nothing left
+            row.update(group=verdict, headline=state.get("headline"), followups=followups, ask=state.get("ask") or None)
             if verdict == "needs_you":
                 row["kind"] = "interrupted" if facts["interrupted"] else "asked"
         elif not config()["judge"]:
@@ -1106,8 +1129,9 @@ def demo_snapshot():
             4,
             headline="Backfill script indexed 1.2M documents; 312 failed on oversized payloads",
             followups=[
-                {"who": "you", "text": "Review and merge PR #482 (backfill script and retry queue)"},
-                {"who": "claude", "text": "Re-run the 312 failed documents once the size limit is raised"},
+                {"who": "you", "text": "Review and merge PR #482 (backfill script and retry queue)", "done": True},
+                {"who": "you", "text": "Raise the payload size limit to 2 MB in the indexer config", "done": False},
+                {"who": "claude", "text": "Re-run the 312 failed documents once the size limit is raised", "done": False},
             ],
         ),
         row(
@@ -1235,6 +1259,8 @@ def main(argv=None):
         sub.add_parser(name)
     sub.add_parser("snapshot").add_argument("--no-judge", action="store_true")
     sub.add_parser("judge").add_argument("session_id")
+    for name in ("check", "uncheck"):
+        sub.add_parser(name).add_argument("session_id")
     for name in ("focus", "reply", "clear", "close"):
         sub.add_parser(name).add_argument("pid", type=int)
     internal = sub.add_parser("_judge")
@@ -1265,6 +1291,8 @@ def main(argv=None):
             clear(args.pid)
         elif args.cmd == "close":
             close(args.pid)
+        elif args.cmd in ("check", "uncheck"):
+            set_checked(args.session_id, sys.stdin.read(), args.cmd == "check")
         elif args.cmd == "hooks-status":
             print(hooks_status())
         elif args.cmd == "install-hooks":

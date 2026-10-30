@@ -207,6 +207,50 @@ class Groups(Sandbox):
         self.assertFalse(row["can_reply"])
 
 
+class Checklist(Sandbox):
+    FOLLOWUPS = [{"who": "you", "text": "Merge PR #12"}, {"who": "claude", "text": "Re-run the backfill"}]
+
+    def judged(self):
+        self.write_transcript(user("backfill"), assistant("a1", text("Backfill done, PR #12 is open.")))
+        self.open_session()
+        cockpit.save_state(SID, {"turn_key": "a1", "verdict": "followups", "headline": "Backfill done", "followups": self.FOLLOWUPS})
+
+    def test_ticks_mark_items_done(self):
+        self.judged()
+        cockpit.set_checked(SID, "Merge PR #12\n", True)
+        row = self.row()
+        self.assertEqual(row["group"], "followups")
+        self.assertEqual([f["done"] for f in row["followups"]], [True, False])
+
+        cockpit.set_checked(SID, "Merge PR #12", False)
+        self.assertEqual([f["done"] for f in self.row()["followups"]], [False, False])
+
+    def test_every_item_ticked_is_safe_to_close(self):
+        self.judged()
+        for item in self.FOLLOWUPS:
+            cockpit.set_checked(SID, item["text"], True)
+        row = self.row()
+        self.assertEqual(row["group"], "close")
+        self.assertTrue(row["can_close"])
+
+    def test_ticks_survive_a_new_verdict_and_reach_the_judge(self):
+        self.judged()
+        cockpit.set_checked(SID, "Merge PR #12", True)
+        state = cockpit.load_state(SID)
+        state.update(cockpit.clean_verdict({"verdict": "followups", "followups": [{"who": "you", "text": "Merge PR #12"}, "Deploy"]}))
+        cockpit.save_state(SID, state)
+        self.assertEqual([f["done"] for f in self.row()["followups"]], [True, False])
+        context = cockpit.judge_context(self.transcript, "Demo", "/work", cockpit.load_state(SID)["checked"])
+        self.assertIn("already ticked off as done:\n- Merge PR #12", context)
+
+    def test_remembers_a_bounded_number(self):
+        for i in range(cockpit.MAX_CHECKED + 5):
+            cockpit.set_checked(SID, f"item {i}", True)
+        checked = cockpit.load_state(SID)["checked"]
+        self.assertEqual(len(checked), cockpit.MAX_CHECKED)
+        self.assertEqual(checked[-1], f"item {cockpit.MAX_CHECKED + 4}")
+
+
 class Verdicts(unittest.TestCase):
     def test_unknown_verdict_becomes_done(self):
         self.assertEqual(cockpit.clean_verdict({"verdict": "maybe"})["verdict"], "done")
