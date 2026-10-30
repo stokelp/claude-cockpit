@@ -6,6 +6,8 @@ Commands used by the menu bar app:
   focus PID               bring the session's terminal tab to the front
   focused                 print the PID in the terminal tab in front of you, if any
   reply PID               type stdin into an idle session and press Enter
+  answer PID              answer the session's question picker: stdin is {"id": tool_use_id,
+                          "answers": [[option index, ...] per question]}
   clear PID               type /clear into an idle session: same tab, fresh conversation
   close PID               end an idle session (SIGTERM to that PID) and close its tab
   check SESSION_ID        tick the follow-up whose text is on stdin (uncheck: untick it)
@@ -15,7 +17,8 @@ Commands used by the menu bar app:
                           the tabs of the last restart. From a Ghostty tab it asks `serve`.
 
 Setup and debugging:
-  hook                    Claude Code hook entry point (Stop, StopFailure, Notification)
+  hook                    Claude Code hook entry point (Stop, StopFailure, Notification, and
+                          PreToolUse for AskUserQuestion)
   install-hooks           add the hook to Claude Code's user settings (a backup is kept)
   uninstall-hooks         remove it again
   snapshot [--no-judge]   print one snapshot, indented
@@ -88,7 +91,9 @@ CLAUDE_INTERNAL_ENV = (
     "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",
 )
 
-HOOK_EVENTS = ("Stop", "StopFailure", "Notification")
+HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PreToolUse")
+# PreToolUse only for the question picker: every other tool call goes on without us.
+HOOK_MATCHERS = {"PreToolUse": "AskUserQuestion"}
 HOOK_PATTERN = re.compile(r"cockpit\.py['\"]?\s+hook\b")
 
 GROUPS = ("needs_you", "working", "followups", "done", "close", "ready")
@@ -334,6 +339,7 @@ def scan(path):
         "last_ts": None,
         "activity": None,
         "pending": [],  # tool calls without a result since the last prompt
+        "tool_ids": set(),  # every tool call in the tail, answered or not
         "interrupted": False,
     }
     pending = {}
@@ -361,6 +367,7 @@ def scan(path):
             if kind == "tool_use":
                 name = b.get("name") or ""
                 pending[b.get("id")] = {"id": b.get("id"), "name": name, "input": b.get("input") or {}, "ts": ts}
+                facts["tool_ids"].add(b.get("id"))
                 facts["activity"] = describe_tool(name, b.get("input"))
             elif kind == "text" and b.get("text", "").strip():
                 facts["activity"] = "Writing"
@@ -612,7 +619,8 @@ def session_name(sid):
 
 
 def hook():
-    """Stop / StopFailure / Notification hook. Never blocks: the judge runs detached."""
+    """Stop / StopFailure / Notification / PreToolUse (AskUserQuestion) hook. Never blocks: the
+    judge runs detached, and PreToolUse prints nothing, so the call goes on as if we were not here."""
     if os.environ.get("CLAUDE_COCKPIT_CHILD"):
         return
     if not os.environ.get("CLAUDE_CODE_ENTRYPOINT", "cli").startswith("cli"):
@@ -621,6 +629,18 @@ def hook():
     sid, event, path = data.get("session_id"), data.get("hook_event_name"), data.get("transcript_path")
     if not sid or not path or not os.path.exists(path):
         return
+    if event == "PreToolUse":
+        # Since Claude Code 2.1.314 a question picker reaches the transcript only once answered:
+        # this is the one place its questions can be read while it waits.
+        if data.get("tool_name") == "AskUserQuestion" and data.get("tool_use_id"):
+            state = load_state(sid)
+            state["picker"] = {"id": data["tool_use_id"], "input": data.get("tool_input") or {}, "at": time.time()}
+            save_state(sid, state)
+        return
+    if event in ("Stop", "StopFailure"):
+        state = load_state(sid)
+        if state.pop("picker", None):  # a picker never outlives its turn
+            save_state(sid, state)
     if event == "Notification":
         kind = data.get("notification_type") or ""
         message = data.get("message") or ""
@@ -757,6 +777,29 @@ on run argv
 end run
 """
 
+    # Keys as typed, one by one with a pause (the picker reads keys arriving together as one
+    # input), and no Enter after them.
+    KEYS = """
+on run argv
+  tell application id "com.mitchellh.ghostty"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with term in terminals of t
+          if id of term is item 1 of argv then
+            repeat with c in (items 2 thru -1 of argv)
+              perform action ("text:" & (c as text)) on term
+              delay 0.35
+            end repeat
+            return "ok"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "missing"
+end run
+"""
+
     FOCUSED = """
 if application id "com.mitchellh.ghostty" is running then
   tell application id "com.mitchellh.ghostty"
@@ -814,6 +857,11 @@ end run
         # The text: action reads Zig string escapes, so a backslash is doubled.
         chars = [c.replace("\\", "\\\\") for c in command]
         if osascript(self.CHARS, t["term_id"], *chars) != "ok":
+            raise RuntimeError("Tab not found")
+
+    def keys(self, t, keys):
+        """Press keys such as "2" or "\\t" (the text: action reads Zig string escapes)."""
+        if osascript(self.KEYS, t["term_id"], *keys, timeout=20) != "ok":
             raise RuntimeError("Tab not found")
 
     def close(self, t):
@@ -909,6 +957,48 @@ def reply(pid, text):
     t["adapter"].type(t, text)
 
 
+def picker_keys(questions, answers):
+    """The keys that answer Claude Code's AskUserQuestion picker, checked on a real picker
+    (2.1.314): an option's number answers a single-choice question and moves on, and ticks an
+    option of a multi-choice one, where Tab moves on. Several questions or a multi-choice one end
+    on a review screen whose option 1 is "Submit answers"; a lone single-choice question is sent
+    by its number. Options are numbered from 1 (4 at most, "Type something" comes after)."""
+    if not isinstance(answers, list) or len(answers) != len(questions):
+        raise RuntimeError("Answer every question")
+    keys = []
+    for q, chosen in zip(questions, answers):
+        options = [o for o in q.get("options") or [] if isinstance(o, dict)]
+        if not isinstance(chosen, list) or not chosen:
+            raise RuntimeError("Answer every question")
+        if any(not isinstance(i, int) or not 0 <= i < len(options) or i > 8 for i in chosen):
+            raise RuntimeError("Unknown option")
+        if q.get("multiSelect"):
+            keys += [str(i + 1) for i in sorted(set(chosen))] + ["\\t"]
+        elif len(chosen) == 1:
+            keys.append(str(chosen[0] + 1))
+        else:
+            raise RuntimeError("One answer only for this question")
+    if len(questions) > 1 or any(q.get("multiSelect") for q in questions):
+        keys.append("1")
+    return keys
+
+
+def answer(pid, payload):
+    """Answer the question picker waiting in the session, by pressing its keys in the tab."""
+    try:
+        payload = json.loads(payload)
+    except ValueError:
+        raise RuntimeError("Bad answer") from None
+    s = session_for_pid(pid)
+    facts = scan(transcript_path(s["sessionId"], s.get("cwd") or ""))
+    picker = waiting_picker(load_state(s["sessionId"]), facts, s.get("status"))
+    if not picker or picker["id"] != payload.get("id"):
+        raise RuntimeError("The question is no longer waiting")
+    keys = picker_keys((picker["input"] or {}).get("questions") or [], payload.get("answers"))
+    t = terminal_for_pid(pid)
+    t["adapter"].keys(t, keys)
+
+
 def clear(pid):
     """Start a fresh conversation in the same tab (Claude Code's /clear)."""
     if session_for_pid(pid).get("status") != "idle":
@@ -950,18 +1040,41 @@ def live_sessions():
     return out
 
 
-def picker_summary(tool):
+def picker_view(tool):
+    """The questions of a pending AskUserQuestion picker, answered from the panel by `answer`."""
     questions = (tool.get("input") or {}).get("questions") or []
     if not questions:
         return None
-    q = questions[0]
     return {
-        "header": clip(q.get("header"), 30),
-        "question": clip(q.get("question"), 300),
-        "options": [clip(o.get("label"), 60) for o in q.get("options") or [] if isinstance(o, dict)],
-        "multi": bool(q.get("multiSelect")),
-        "more": len(questions) - 1,
+        "id": tool["id"],
+        "questions": [
+            {
+                "header": clip(q.get("header"), 30),
+                "question": clip(q.get("question"), 300),
+                "options": [
+                    {"label": clip(o.get("label"), 60), "description": clip(o.get("description"), 200) or None}
+                    for o in q.get("options") or []
+                    if isinstance(o, dict)
+                ],
+                "multi": bool(q.get("multiSelect")),
+            }
+            for q in questions
+            if isinstance(q, dict)
+        ],
     }
+
+
+def waiting_picker(state, facts, status):
+    """The question picker on screen. Older Claude Code versions put it in the transcript while
+    it waits (the session reads busy); since 2.1.314 the session reads "waiting" and the call
+    shows up only once answered, so it comes from what the PreToolUse hook recorded."""
+    picker = next((p for p in reversed(facts["pending"]) if p["name"] == "AskUserQuestion"), None)
+    if picker:
+        return picker
+    recorded = state.get("picker")
+    if not recorded or status != "waiting" or recorded.get("id") in facts["tool_ids"]:
+        return None
+    return {"id": recorded["id"], "name": "AskUserQuestion", "input": recorded.get("input") or {}, "ts": recorded.get("at")}
 
 
 def attention_live(attention, facts, path, sid, status):
@@ -1014,6 +1127,7 @@ class Snapshotter:
             "last_ts": None,
             "activity": None,
             "pending": [],
+            "tool_ids": set(),
             "interrupted": False,
         }
         if not path:
@@ -1065,18 +1179,18 @@ class Snapshotter:
             "group": "working",
             "kind": None,
             "judging": False,
-            "question": None,
+            "picker": None,
             "ask": None,
             "activity": None,
             "headline": None,
             "followups": [],
         }
-        picker = next((p for p in reversed(facts["pending"]) if p["name"] == "AskUserQuestion"), None)
+        picker = waiting_picker(state, facts, status)
         plan = next((p for p in reversed(facts["pending"]) if p["name"] == "ExitPlanMode"), None)
         attention = state.get("attention")
 
         if picker:
-            row.update(group="needs_you", kind="picker", question=picker_summary(picker), since=picker["ts"] or row["since"])
+            row.update(group="needs_you", kind="picker", picker=picker_view(picker), since=picker["ts"] or row["since"])
         elif plan:
             row.update(group="needs_you", kind="plan", ask="A plan is ready for your approval", since=plan["ts"] or row["since"])
         elif status == "waiting" or attention_live(attention, facts, path, sid, status):
@@ -1174,7 +1288,7 @@ def demo_snapshot():
             "group": group,
             "kind": None,
             "judging": False,
-            "question": None,
+            "picker": None,
             "ask": None,
             "activity": None,
             "headline": None,
@@ -1198,12 +1312,20 @@ def demo_snapshot():
             420,
             2,
             kind="picker",
-            question={
-                "header": "Layout",
-                "question": "Keep the order summary in a sticky sidebar, or move it above the payment form on mobile?",
-                "options": ["Sticky sidebar (Recommended)", "Above the form on mobile", "Collapsible summary"],
-                "multi": False,
-                "more": 0,
+            picker={
+                "id": "demo-picker",
+                "questions": [
+                    {
+                        "header": "Layout",
+                        "question": "Keep the order summary in a sticky sidebar, or move it above the payment form on mobile?",
+                        "options": [
+                            {"label": "Sticky sidebar (Recommended)", "description": "Always visible on desktop"},
+                            {"label": "Above the form on mobile", "description": None},
+                            {"label": "Collapsible summary", "description": None},
+                        ],
+                        "multi": False,
+                    }
+                ],
             },
         ),
         row(
@@ -1317,7 +1439,10 @@ def install_hooks():
     strip_our_hooks(settings)
     hooks = settings.setdefault("hooks", {})
     for event in HOOK_EVENTS:
-        hooks.setdefault(event, []).append({"hooks": [{"type": "command", "command": hook_command(), "timeout": 10}]})
+        group = {"hooks": [{"type": "command", "command": hook_command(), "timeout": 10}]}
+        if event in HOOK_MATCHERS:
+            group = {"matcher": HOOK_MATCHERS[event], **group}
+        hooks.setdefault(event, []).append(group)
     write_json_atomic(SETTINGS_FILE, settings)
     return f"Hooks installed in {SETTINGS_FILE}"
 
@@ -1360,7 +1485,7 @@ def main(argv=None):
     sub.add_parser("judge").add_argument("session_id")
     for name in ("check", "uncheck"):
         sub.add_parser(name).add_argument("session_id")
-    for name in ("focus", "reply", "clear", "close"):
+    for name in ("focus", "reply", "answer", "clear", "close"):
         sub.add_parser(name).add_argument("pid", type=int)
     ghostty = sub.add_parser("restart-ghostty")
     for flag in ("--force", "--auto", "--restore"):
@@ -1391,6 +1516,8 @@ def main(argv=None):
             focus(args.pid)
         elif args.cmd == "reply":
             reply(args.pid, sys.stdin.read())
+        elif args.cmd == "answer":
+            answer(args.pid, sys.stdin.read())
         elif args.cmd == "clear":
             clear(args.pid)
         elif args.cmd == "close":

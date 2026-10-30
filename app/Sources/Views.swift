@@ -184,6 +184,9 @@ struct SessionCard: View {
     @State private var confirmingClose = false
     @State private var hovering = false
     @State private var showMissingTicks = false
+    /// Options picked so far, per question, before Send (pickers with several answers).
+    @State private var chosen: [Int: Set<Int>] = [:]
+    @State private var showMissingAnswers = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -198,6 +201,7 @@ struct SessionCard: View {
             }
             .buttonStyle(.plain)
             .help(session.lastPrompt.map { "Last prompt: \($0)" } ?? "Open the tab")
+            if group == .needsYou, session.kind == "picker", let p = session.picker { picker(p) }
             if hasChecklist { checklist }
             if session.canReply || session.canClear || session.canClose { actions }
         }
@@ -206,6 +210,7 @@ struct SessionCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(hovering ? 0.085 : 0.05)))
         .onHover { hovering = $0 }
+        .onChange(of: session.picker?.id) { chosen = [:] }
     }
 
     private var title: some View {
@@ -235,8 +240,8 @@ struct SessionCard: View {
     @ViewBuilder private var content: some View {
         switch group {
         case .needsYou:
-            if session.kind == "picker", let q = session.question {
-                picker(q)
+            if session.kind == "picker", session.picker != nil {
+                EmptyView()  // drawn below the card's button: its option buttons take clicks
             } else {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(session.ask ?? session.headline ?? "Waiting for you")
@@ -318,24 +323,85 @@ struct SessionCard: View {
         store.reply(session, "Done: " + items.joined(separator: "; ") + ".")
     }
 
-    private func picker(_ q: Question) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(q.question ?? "").font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
-            FlowLayout(spacing: 4) {
-                ForEach(Array(q.options.enumerated()), id: \.offset) { _, option in
-                    Text(option)
-                        .font(.system(size: 11))
-                        .lineLimit(1)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.primary.opacity(0.07)))
+    /// The picker's questions with their options as buttons. A lone single-choice question is
+    /// answered by its click, as its number answers it in the terminal; otherwise the picks go
+    /// out together with Send. Outside the card's button, so a pick does not open the tab.
+    private func picker(_ p: Picker) -> some View {
+        let sent = store.answered[p.id]
+        let quick = p.questions.count == 1 && p.questions[0].multi == false
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(p.questions.enumerated()), id: \.offset) { qi, q in
+                VStack(alignment: .leading, spacing: 5) {
+                    Button { store.focus(session) } label: {
+                        Text(q.question ?? "")
+                            .font(.system(size: 12))
+                            .foregroundStyle(showMissingAnswers && (chosen[qi] ?? []).isEmpty ? Color.orange : Color.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open the tab")
+                    FlowLayout(spacing: 4) {
+                        ForEach(Array(q.options.enumerated()), id: \.offset) { oi, option in
+                            let on = sent.map { qi < $0.count && $0[qi].contains(oi) } ?? (chosen[qi]?.contains(oi) ?? false)
+                            Button { pick(p, qi, oi, quick: quick) } label: {
+                                HStack(spacing: 4) {
+                                    if q.multi { Image(systemName: on ? "checkmark.square.fill" : "square").font(.system(size: 11)) }
+                                    Text(option.label).font(.system(size: 11)).lineLimit(1)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .foregroundStyle(on ? Color.white : Color.primary)
+                                .background(Capsule().fill(on ? Color.accentColor : Color.primary.opacity(0.08)))
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .help(option.description ?? option.label)
+                        }
+                    }
                 }
             }
-            let notes = [q.multi ? "Several answers allowed" : nil, q.more > 0 ? "+\(q.more) more question\(q.more > 1 ? "s" : "")" : nil].compactMap { $0 }
-            if !notes.isEmpty {
-                Text(notes.joined(separator: ", ")).font(.system(size: 11)).foregroundStyle(.tertiary)
+            if !quick {
+                HStack {
+                    Spacer()
+                    Button(sent == nil ? "Send" : "Sent") { send(p) }
+                        .help("Answer the question\(p.questions.count > 1 ? "s" : "") in the session")
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
             }
         }
+        .disabled(sent != nil)
+        .opacity(sent != nil ? 0.55 : 1)
+    }
+
+    private func pick(_ p: Picker, _ qi: Int, _ oi: Int, quick: Bool) {
+        if quick {
+            store.answer(session, p, [[oi]])
+            return
+        }
+        var picked = chosen[qi] ?? []
+        if p.questions[qi].multi {
+            if picked.contains(oi) { picked.remove(oi) } else { picked.insert(oi) }
+        } else {
+            picked = [oi]
+        }
+        chosen[qi] = picked
+    }
+
+    private func send(_ p: Picker) {
+        let answers = p.questions.indices.map { (chosen[$0] ?? []).sorted() }
+        guard answers.allSatisfy({ !$0.isEmpty }) else {
+            showMissingAnswers = true
+            store.say("Answer every question")
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                showMissingAnswers = false
+            }
+            return
+        }
+        store.answer(session, p, answers)
     }
 
     private var actions: some View {

@@ -17,6 +17,9 @@ final class Store: ObservableObject {
     }
     /// Ticks clicked but not yet in a snapshot, so the box does not flicker back.
     @Published private var ticks: [String: Bool] = [:]
+    /// Pickers answered from the panel, by tool_use id: locked until the snapshot drops them,
+    /// since a second set of keys would land on whatever the terminal shows next.
+    @Published private(set) var answered: [String: [[Int]]] = [:]
 
     private var server: Process?
     private var buffer = Data()
@@ -78,6 +81,8 @@ final class Store: ObservableObject {
                 ticks[tickKey(s, item)] = nil
             }
         }
+        let waiting = Set(sessions.compactMap { $0.picker?.id })
+        for id in answered.keys where !waiting.contains(id) { answered[id] = nil }
         connected = true
         now = Date()
     }
@@ -96,6 +101,17 @@ final class Store: ObservableObject {
     func focus(_ s: Session) { perform(["focus", String(s.pid)], done: nil) }
     func reply(_ s: Session, _ text: String) { perform(["reply", String(s.pid)], input: text, done: "Sent to \(s.name)") }
     func clear(_ s: Session) { perform(["clear", String(s.pid)], done: "Cleared \(s.name)") }
+
+    /// Answers the session's picker: per question, the indexes of the options chosen.
+    func answer(_ s: Session, _ picker: Picker, _ answers: [[Int]]) {
+        guard answered[picker.id] == nil,
+              let data = try? JSONSerialization.data(withJSONObject: ["id": picker.id, "answers": answers] as [String: Any]),
+              let json = String(data: data, encoding: .utf8) else { return }
+        answered[picker.id] = answers
+        perform(["answer", String(s.pid)], input: json, done: "Answered \(s.name)") { [weak self] in
+            self?.answered[picker.id] = nil
+        }
+    }
     func close(_ s: Session) { perform(["close", String(s.pid)], done: "Closed \(s.name)") }
 
     /// Quits and reopens Ghostty: tabs come back in their folders, Claude sessions resumed.
@@ -128,10 +144,11 @@ final class Store: ObservableObject {
         }
     }
 
-    private func perform(_ args: [String], input: String? = nil, done: String?) {
+    private func perform(_ args: [String], input: String? = nil, done: String?, failed: (() -> Void)? = nil) {
         Task {
             let result = await Backend.run(args, input: input)
             if !result.ok {
+                failed?()
                 let message = result.error.components(separatedBy: "\n").last(where: { !$0.isEmpty }) ?? "Failed"
                 say(message)
                 if message.contains("Automation"), let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {

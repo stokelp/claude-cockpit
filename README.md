@@ -15,7 +15,7 @@ Running several Claude Code sessions in terminal tabs, it is easy to lose track:
 
 | Group | When |
 |---|---|
-| **Needs you** | A question picker, a plan or a permission prompt is waiting, or Claude's last message asks you something it cannot go on without. Pickers show the question and their options. |
+| **Needs you** | A question picker, a plan or a permission prompt is waiting, or Claude's last message asks you something it cannot go on without. Pickers show their questions, and you answer them right there. |
 | **In progress** | A turn is running. Shows what Claude is doing right now (the command, the file being edited, the subagent). |
 | **Follow-ups** | The asked work is finished, but concrete items remain, as a checklist. Each item is tagged with who owns it: **You** (merge, deploy, test, decide) or **Claude** (next steps it said it would do). |
 | **Done** | Finished. Worth a look before you close it. |
@@ -37,6 +37,7 @@ To get the panel instead of Claude Code's own terminal notifications, add this t
 **Actions** (Ghostty only, see [Terminals](#terminals)):
 
 - Click a card to jump to its tab.
+- **Answer a question picker** from its card: with one question, click the answer; with several questions or several answers allowed, pick them, then **Send**. Cockpit presses the same keys you would in the tab (an option's number, Tab, then Submit). To type your own answer, open the tab.
 - Tick a follow-up once it is done. Ticks are kept across restarts and new turns, and the judge is told about them, so it does not list them again. When every item is ticked, the card moves to **Safe to close**.
 - **Tell Claude** (on cards with follow-ups) sends the ticked items to the session in one line, such as `Done: Merge PR #482; Raise the size limit.`
 - **Continue** (on Needs you) sends `continue`, to get the session going again after you did your part or after a failure.
@@ -45,7 +46,8 @@ To get the panel instead of Claude Code's own terminal notifications, add this t
 
 ## How it works
 
-- **Live state** comes from the files Claude Code keeps for open sessions (`~/.claude/sessions/*.json`) and from the end of each session's transcript. A picker or plan that has no answer yet is detected in the transcript, so it shows up even while Claude Code still reports the session as busy.
+- **Live state** comes from the files Claude Code keeps for open sessions (`~/.claude/sessions/*.json`) and from the end of each session's transcript. A plan that has no answer yet is detected in the transcript, so it shows up even while Claude Code still reports the session as busy.
+- **Question pickers**: since Claude Code 2.1.314 a picker reaches the transcript only once answered, and the session reads `waiting` meanwhile. A `PreToolUse` hook, limited to `AskUserQuestion`, records its questions as it opens; it prints nothing, so the picker goes on as usual. Older versions put the picker in the transcript while it waits, and that still works.
 - **Permission prompts**: Claude Code marks the session `waiting` while one is on screen. A `Notification` hook also records which tool asked, when the transcript shows it, and clears it as soon as the tool call gets its result.
 - **The judge**: when a turn ends (`Stop` hook, or the app noticing an idle session that has no verdict yet), a detached `claude -p --model haiku` call reads the session's recent messages and returns a verdict, a one-line headline and the follow-ups. It runs once per finished turn, takes a few seconds, and never blocks the session. Verdicts are stored in `~/.claude/cockpit/state/`.
 - **Terminal tabs** are matched to sessions through Ghostty's AppleScript dictionary, by process ID and then by tty.

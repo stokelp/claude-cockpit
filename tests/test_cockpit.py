@@ -1,5 +1,6 @@
 """Unit tests for cockpit.py. Run with `make test` (standard library only)."""
 
+import io
 import json
 import os
 import sys
@@ -132,8 +133,32 @@ class Groups(Sandbox):
         row = self.row()
         self.assertEqual(row["group"], "needs_you")
         self.assertEqual(row["kind"], "picker")
-        self.assertEqual(row["question"]["options"], ["Postgres", "SQLite"])
+        self.assertEqual(row["picker"]["id"], "t1")
+        self.assertEqual([o["label"] for o in row["picker"]["questions"][0]["options"]], ["Postgres", "SQLite"])
         self.assertFalse(row["can_reply"])
+
+    def test_picker_recorded_by_the_hook_while_waiting(self):
+        self.write_transcript(user("set up storage"), assistant("a1", text("Two options.")))
+        self.open_session(status="waiting")
+        record_picker(self, "t1")
+        row = self.row()
+        self.assertEqual((row["group"], row["kind"]), ("needs_you", "picker"))
+        self.assertEqual(row["picker"]["id"], "t1")
+        self.assertEqual([o["label"] for o in row["picker"]["questions"][0]["options"]], ["Postgres", "SQLite"])
+
+    def test_recorded_picker_ends_with_the_turn(self):
+        self.write_transcript(user("set up storage"), assistant("a1", text("Two options.")))
+        self.open_session(status="waiting")
+        record_picker(self, "t1")
+        run_hook(self, "Stop")
+        self.assertNotIn("picker", cockpit.load_state(SID))
+        self.assertNotEqual(self.row()["kind"], "picker")
+
+    def test_recorded_picker_is_not_shown_once_busy_again(self):
+        self.write_transcript(user("set up storage"), assistant("a1", text("Two options.")))
+        record_picker(self, "t1")
+        self.open_session(status="busy")
+        self.assertNotEqual(self.row()["kind"], "picker")
 
     def test_answered_picker_is_not_pending(self):
         self.write_transcript(
@@ -321,6 +346,12 @@ class Hooks(Sandbox):
             ours = [h for g in s["hooks"][event] for h in g["hooks"] if cockpit.HOOK_PATTERN.search(h["command"])]
             self.assertEqual(len(ours), 1, event)
         self.assertEqual(cockpit.hooks_status(), "installed")
+        self.assertEqual([g.get("matcher") for g in s["hooks"]["PreToolUse"]], ["AskUserQuestion"])
+
+    def test_other_tools_are_ignored(self):
+        self.write_transcript(user("x"))
+        run_hook(self, "PreToolUse", tool_name="Bash", tool_use_id="t9", tool_input={"command": "ls"})
+        self.assertNotIn("picker", cockpit.load_state(SID))
 
     def test_outdated_copy_is_replaced(self):
         old = {"hooks": [{"type": "command", "command": "python3 /old/place/cockpit.py hook"}]}
@@ -360,7 +391,114 @@ class Focused(unittest.TestCase):
             self.assertIsNone(cockpit.focused())
 
 
+def run_hook(test, event, **extra):
+    payload = {"session_id": SID, "hook_event_name": event, "transcript_path": str(test.transcript), "cwd": "/work", **extra}
+    with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), mock.patch.dict(os.environ, {"CLAUDE_CODE_ENTRYPOINT": "cli"}):
+        os.environ.pop("CLAUDE_COCKPIT_CHILD", None)
+        cockpit.hook()
+
+
+def record_picker(test, tool_id):
+    run_hook(test, "PreToolUse", tool_name="AskUserQuestion", tool_use_id=tool_id, tool_input=PICKER_ARGS)
+
+
+def question(*labels, multi=False):
+    return {"question": "Q?", "header": "Q", "multiSelect": multi, "options": [{"label": x, "description": ""} for x in labels]}
+
+
+class PickerKeys(unittest.TestCase):
+    """The keys checked on a real Claude Code picker (2.1.314)."""
+
+    def test_lone_single_choice_is_sent_by_its_number(self):
+        self.assertEqual(cockpit.picker_keys([question("a", "b", "c")], [[1]]), ["2"])
+
+    def test_several_questions_end_on_submit(self):
+        qs = [question("a", "b", "c"), question("r", "g", "b")]
+        self.assertEqual(cockpit.picker_keys(qs, [[1], [2]]), ["2", "3", "1"])
+
+    def test_multi_choice_ticks_then_tab_then_submit(self):
+        self.assertEqual(cockpit.picker_keys([question("a", "b", "c", multi=True)], [[2, 0]]), ["1", "3", "\\t", "1"])
+
+    def test_mixed(self):
+        qs = [question("a", "b"), question("x", "y", "z", multi=True)]
+        self.assertEqual(cockpit.picker_keys(qs, [[0], [1]]), ["1", "2", "\\t", "1"])
+
+    def test_refuses_what_the_picker_would_misread(self):
+        qs = [question("a", "b"), question("x", "y")]
+        for answers in ([[0]], [[0], []], [[0], [2]], [[0, 1], [0]], [[0], ["1"]], "0,1"):
+            with self.subTest(answers=answers), self.assertRaises(RuntimeError):
+                cockpit.picker_keys(qs, answers)
+
+
+class Answer(Sandbox):
+    """Answering the picker types into the tab only while that same picker waits."""
+
+    def setUp(self):
+        super().setUp()
+        self.pressed = []
+        adapter = mock.Mock()
+        adapter.keys.side_effect = lambda t, keys: self.pressed.append(keys)
+        patch = mock.patch.object(cockpit, "terminal_for_pid", lambda pid: {"adapter": adapter})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def answer(self, tool_id, answers):
+        cockpit.answer(os.getpid(), json.dumps({"id": tool_id, "answers": answers}))
+
+    def test_presses_the_keys_of_the_waiting_picker(self):
+        self.write_transcript(user("set up storage"), assistant("a1", tool_use("t1", "AskUserQuestion", PICKER_ARGS)))
+        self.open_session(status="busy")
+        self.answer("t1", [[1]])
+        self.assertEqual(self.pressed, [["2"]])
+
+    def test_another_picker_or_an_answered_one_is_refused(self):
+        self.write_transcript(
+            user("set up storage"),
+            assistant("a1", tool_use("t1", "AskUserQuestion", PICKER_ARGS)),
+            tool_result("t1", "Postgres"),
+        )
+        self.open_session(status="busy")
+        for tool_id in ("t1", "t0"):
+            with self.subTest(tool_id=tool_id), self.assertRaises(RuntimeError):
+                self.answer(tool_id, [[0]])
+        self.assertEqual(self.pressed, [])
+
+    def test_picker_recorded_by_the_hook(self):
+        # Claude Code 2.1.314: the session reads "waiting", the transcript has no call yet.
+        self.write_transcript(user("set up storage"), assistant("a1", text("Two options.")))
+        self.open_session(status="waiting")
+        record_picker(self, "t1")
+        self.answer("t1", [[0]])
+        self.assertEqual(self.pressed, [["1"]])
+
+    def test_not_over_a_permission_prompt(self):
+        self.write_transcript(user("set up storage"), assistant("a1", text("Two options.")))
+        self.open_session(status="waiting")
+        record_picker(self, "t1")
+        self.write_transcript(
+            user("set up storage"),
+            assistant("a1", tool_use("t1", "AskUserQuestion", PICKER_ARGS)),
+            tool_result("t1", "Postgres"),
+        )  # answered: the waiting is another prompt now
+        with self.assertRaises(RuntimeError):
+            self.answer("t1", [[0]])
+        self.open_session(status="waiting")
+        cockpit.save_state(SID, {})
+        with self.assertRaises(RuntimeError):
+            self.answer("t1", [[0]])
+        self.assertEqual(self.pressed, [])
+
+
 class SlashCommands(unittest.TestCase):
+    def test_picker_keys_typed_one_by_one_without_enter(self):
+        with mock.patch.object(cockpit, "osascript", return_value="ok") as run:
+            cockpit.Ghostty().keys({"term_id": "t1"}, ["1", "\\t", "1"])
+        script, *args = run.call_args.args
+        self.assertIn('perform action ("text:"', script)
+        self.assertIn("delay", script)
+        self.assertNotIn("enter", script)
+        self.assertEqual(args, ["t1", "1", "\\t", "1"])
+
     def test_typed_as_characters_not_physical_keys(self):
         # Physical keys turned "/clear" into "!cleqr" on a French AZERTY layout.
         with mock.patch.object(cockpit, "osascript", return_value="ok") as run:

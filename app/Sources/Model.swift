@@ -1,12 +1,21 @@
 import SwiftUI
 
-/// The first question of a pending AskUserQuestion picker.
+/// A pending AskUserQuestion picker, answered from the panel (`cockpit.py answer`).
+struct Picker: Decodable {
+    let id: String
+    let questions: [Question]
+}
+
 struct Question: Decodable {
     let header: String?
     let question: String?
-    let options: [String]
+    let options: [Option]
     let multi: Bool
-    let more: Int
+}
+
+struct Option: Decodable {
+    let label: String
+    let description: String?
 }
 
 struct Followup: Decodable, Hashable {
@@ -28,7 +37,7 @@ struct Session: Decodable, Identifiable {
     let group: String
     let kind: String?
     let judging: Bool
-    let question: Question?
+    let picker: Picker?
     let ask: String?
     let activity: String?
     let headline: String?
