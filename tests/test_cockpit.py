@@ -360,5 +360,21 @@ class Focused(unittest.TestCase):
             self.assertIsNone(cockpit.focused())
 
 
+class SlashCommands(unittest.TestCase):
+    def test_typed_as_characters_not_physical_keys(self):
+        # Physical keys turned "/clear" into "!cleqr" on a French AZERTY layout.
+        with mock.patch.object(cockpit, "osascript", return_value="ok") as run:
+            cockpit.Ghostty().command({"term_id": "t1"}, "/clear")
+        script, *args = run.call_args.args
+        self.assertIn('perform action ("text:"', script)
+        self.assertNotIn("send key (", script)
+        self.assertEqual(args, ["t1", "/", "c", "l", "e", "a", "r"])
+
+    def test_backslash_doubled_for_the_text_action(self):
+        with mock.patch.object(cockpit, "osascript", return_value="ok") as run:
+            cockpit.Ghostty().command({"term_id": "t1"}, "/a\\b")
+        self.assertEqual(run.call_args.args[2:], ("/", "a", "\\\\", "b"))
+
+
 if __name__ == "__main__":
     unittest.main()

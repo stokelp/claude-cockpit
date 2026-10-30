@@ -708,17 +708,19 @@ on run argv
 end run
 """
 
-    # Keys one by one, as if typed: a pasted "/clear" opens the command menu and Enter
-    # then completes it a second time ("/clear/clear" sent as a message).
-    KEYS = """
+    # Characters one by one, as if typed. A pasted "/clear" (input text) opens the command
+    # menu and Enter then completes it a second time ("/clear/clear" sent as a message).
+    # send key presses physical keys, so a French AZERTY layout turned "/clear" into
+    # "!cleqr" ("!" switches Claude Code to bash mode). The text: action writes characters.
+    CHARS = """
 on run argv
   tell application id "com.mitchellh.ghostty"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with term in terminals of t
           if id of term is item 1 of argv then
-            repeat with k in (items 2 thru -1 of argv)
-              send key (k as text) to term
+            repeat with c in (items 2 thru -1 of argv)
+              perform action ("text:" & (c as text)) on term
             end repeat
             delay 0.5
             send key "enter" to term
@@ -731,8 +733,6 @@ on run argv
   return "missing"
 end run
 """
-
-    KEY_NAMES = {"/": "slash", " ": "space", "-": "minus"}
 
     FOCUSED = """
 if application id "com.mitchellh.ghostty" is running then
@@ -788,8 +788,9 @@ end run
 
     def command(self, t, command):
         """Run a slash command such as /clear by typing it."""
-        keys = [self.KEY_NAMES.get(c, c) for c in command]
-        if osascript(self.KEYS, t["term_id"], *keys) != "ok":
+        # The text: action reads Zig string escapes, so a backslash is doubled.
+        chars = [c.replace("\\", "\\\\") for c in command]
+        if osascript(self.CHARS, t["term_id"], *chars) != "ok":
             raise RuntimeError("Tab not found")
 
     def close(self, t):
