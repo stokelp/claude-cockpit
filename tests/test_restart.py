@@ -276,16 +276,84 @@ class Watching(unittest.TestCase):
         self.assertEqual(self.spawned, [])
 
     def test_request_from_inside_ghostty(self):
-        cockpit.write_json_atomic(cockpit.DATA_DIR / restart.REQUEST_NAME, {"at": time.time(), "force": True})
+        cockpit.write_json_atomic(cockpit.DATA_DIR / restart.REQUEST_NAME, {"at": time.time(), "force": False, "spare": [41, 42]})
         status = self.tick()
-        self.assertEqual(self.spawned, [{"force": True, "auto": False}])
+        self.assertEqual(self.spawned, [{"force": False, "auto": False, "spare": [41, 42]}])
         self.assertTrue(status["restarting"])
         self.assertFalse((cockpit.DATA_DIR / restart.REQUEST_NAME).exists())
+
+    def test_forced_request_stays_forced(self):
+        cockpit.write_json_atomic(cockpit.DATA_DIR / restart.REQUEST_NAME, {"at": time.time(), "force": True, "spare": [41]})
+        self.tick()
+        self.assertEqual(self.spawned, [{"force": True, "auto": False, "spare": [41]}])
 
     def test_old_request_is_ignored(self):
         cockpit.write_json_atomic(cockpit.DATA_DIR / restart.REQUEST_NAME, {"at": time.time() - 300})
         self.tick()
         self.assertEqual(self.spawned, [])
+
+
+class BusyCheckTest(unittest.TestCase):
+    """restart() checks for working sessions itself, right before ending them."""
+
+    class Started(Exception):
+        pass
+
+    def setUp(self):
+        self.notes, self.logs = [], []
+        self.claude = []
+        self.patches = [
+            mock.patch.object(restart, "restart_running", lambda *a: False),
+            mock.patch.object(restart, "process_table", lambda: {}),
+            mock.patch.object(restart, "ghostty_pid", lambda table: 1),
+            mock.patch.object(restart, "read_layout", lambda: [["tab"]]),
+            mock.patch.object(restart, "unregistered_sessions", lambda known: []),
+            mock.patch.object(restart, "make_plan", lambda *a: []),
+            mock.patch.object(restart, "resumed", lambda plan: self.claude),
+            mock.patch.object(cockpit, "live_sessions", lambda: []),
+            mock.patch.object(cockpit, "ttys_of", lambda pids: {}),
+            mock.patch.object(cockpit, "log", self.logs.append),
+            mock.patch.object(restart, "notify", lambda *a: self.notes.append(a)),
+            mock.patch.object(restart, "save_state", mock.Mock(side_effect=self.Started)),  # first step past the check
+            mock.patch.dict(os.environ),
+        ]
+        for p in self.patches:
+            p.start()
+        os.environ.pop(restart.SPARE_ENV, None)
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def test_requested_restart_spares_only_the_asking_session(self):
+        os.environ[restart.SPARE_ENV] = "41,42"
+        self.claude = [{"pid": 42, "status": "busy", "name": "asker"}]
+        with self.assertRaises(self.Started):
+            restart.restart()
+        self.claude.append({"pid": 77, "status": "busy", "name": "other work"})
+        with self.assertRaisesRegex(RuntimeError, r"1 Claude session still working \(other work\)"):
+            restart.restart()
+        self.assertEqual(self.notes[0][0], "Ghostty restart canceled")  # nobody sees a spawned restart's error
+
+    def test_force_ends_busy_sessions(self):
+        self.claude = [{"pid": 77, "status": "busy", "name": "other work"}]
+        with self.assertRaises(self.Started):
+            restart.restart(force=True)
+
+    def test_restart_by_hand_refuses_without_notifying(self):
+        self.claude = [{"pid": 77, "status": "waiting", "name": "other work"}]
+        with self.assertRaises(RuntimeError):
+            restart.restart()
+        self.assertEqual(self.notes, [])
+
+    def test_spawn_passes_the_asking_session(self):
+        with mock.patch.object(subprocess, "Popen") as popen:
+            os.environ[restart.SPARE_ENV] = "9"  # never inherited from serve itself
+            restart.spawn_restart(force=False)
+            self.assertNotIn(restart.SPARE_ENV, popen.call_args.kwargs["env"])
+            restart.spawn_restart(force=False, spare=[41, 42])
+            self.assertEqual(popen.call_args.kwargs["env"][restart.SPARE_ENV], "41,42")
+            self.assertNotIn("--force", popen.call_args.args[0])
 
 
 if __name__ == "__main__":

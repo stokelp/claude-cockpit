@@ -53,6 +53,9 @@ AWAY = 60.0  # automatic restarts wait until keyboard and mouse were untouched t
 COOLDOWN = 600.0  # no automatic restart within this many seconds of the last restart
 RUNNING_FOR = 180.0  # a restart still marked running after this long is dead
 REQUEST_WAIT = 6.0  # how long a request from inside Ghostty waits for `serve` to take it
+# Set on a restart `serve` runs for a request: the PIDs of the session that asked, which may be
+# ended while busy (it is busy only running the request).
+SPARE_ENV = "COCKPIT_RESTART_SPARE"
 AUTO_FOR = {"claude", "Ghostty"}  # replaced programs that restart Ghostty by themselves
 
 ENV_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_")
@@ -570,7 +573,10 @@ def plural(n, word):
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
-def restart(force=False, auto=False):
+def restart(force=False, auto=False, spare=None):
+    requested = SPARE_ENV in os.environ
+    if spare is None:
+        spare = {int(p) for p in os.environ.get(SPARE_ENV, "").split(",") if p.isdigit()}
     if restart_running():
         raise RuntimeError("Ghostty is already restarting")
     table = process_table()
@@ -584,10 +590,14 @@ def restart(force=False, auto=False):
     sessions += unregistered_sessions({s["pid"] for s in sessions})
     plan = make_plan(layout, sessions, cp.ttys_of([s["pid"] for s in sessions]), proc_args)
     claude = resumed(plan)
-    busy = [r for r in claude if r["status"] in WORKING]
+    busy = [r for r in claude if r["status"] in WORKING and r["pid"] not in spare]
     if busy and not force:
         names = ", ".join(cp.clip(r["name"], 40) for r in busy)
-        raise RuntimeError(f"{plural(len(busy), 'Claude session')} still working ({names}). Wait, or restart anyway with --force.")
+        reason = f"{plural(len(busy), 'Claude session')} still working ({names})"
+        if requested:  # run by `serve` for a Ghostty tab: nobody sees the error below
+            cp.log(f"ghostty restart canceled: {reason}")
+            notify("Ghostty restart canceled", f"{reason}. Wait, or restart anyway with --force.")
+        raise RuntimeError(f"{reason}. Wait, or restart anyway with --force.")
 
     tabs = sum(len(w["tabs"]) for w in plan)
     started = time.time()
@@ -643,8 +653,9 @@ def request(force=False):
         names = ", ".join(cp.clip(s.get("name") or s["sessionId"][:8], 40) for s in busy)
         raise RuntimeError(f"{plural(len(busy), 'Claude session')} still working ({names}). Wait, or restart anyway with --force.")
     path = _path(REQUEST_NAME)
-    # The Claude session this was typed in is busy only for this command: it may be ended.
-    cp.write_json_atomic(path, {"at": time.time(), "force": True})
+    # `serve` checks again when it restarts: a session may start working in between. Only the
+    # one this was typed in (busy just running this command) may be ended without --force.
+    cp.write_json_atomic(path, {"at": time.time(), "force": force, "spare": sorted(mine)})
     deadline = time.time() + REQUEST_WAIT
     while time.time() < deadline:
         if not path.exists():
@@ -689,12 +700,19 @@ def command(force=False, auto=False, restore_saved=False):
     return restore() if restore_saved else restart(force=force, auto=auto)
 
 
-def spawn_restart(force=False, auto=False):
-    """Runs a restart in its own process, so `serve` keeps reporting meanwhile."""
+def spawn_restart(force=False, auto=False, spare=None):
+    """Runs a restart in its own process, so `serve` keeps reporting meanwhile.
+
+    `spare`: set for a request from a Ghostty tab, the PIDs of the session that asked.
+    """
     args = [sys.executable, os.path.abspath(cp.__file__), "restart-ghostty"]
     args += ["--force"] if force else []
     args += ["--auto"] if auto else []
-    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    env = dict(os.environ)
+    env.pop(SPARE_ENV, None)
+    if spare is not None:
+        env[SPARE_ENV] = ",".join(str(p) for p in spare)
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
 
 
 # --------------------------------------------------------------------- watching
@@ -719,7 +737,8 @@ class Watcher:
         now = time.time() if now is None else now
         asked = take_request()
         if asked is not None:
-            self.spawn(force=bool(asked.get("force")), auto=False)
+            spare = [p for p in asked.get("spare") or [] if isinstance(p, int)]
+            self.spawn(force=bool(asked.get("force")), auto=False, spare=spare)
             self.spawned_at = now
         if now - self.checked_at >= CHECK_EVERY:
             self.checked_at = now
