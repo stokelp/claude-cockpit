@@ -112,6 +112,7 @@ struct CockpitView: View {
     // Offscreen renders (screenshots) cannot draw a Menu, so they get a plain icon instead.
     private var settingsMenu: some View {
         Menu {
+            Toggle("Open when a session needs you", isOn: $store.popsUp)
             Toggle("Open at login", isOn: Binding(get: { store.openAtLogin }, set: { _ in store.toggleOpenAtLogin() }))
             Divider()
             if store.hooks == "installed" {

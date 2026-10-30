@@ -344,5 +344,21 @@ class Hooks(Sandbox):
         self.assertEqual(self.paths["SETTINGS_FILE"].read_text(), "{not json")
 
 
+class Focused(unittest.TestCase):
+    """The tab in front of you, which keeps the panel from opening over the session you are in."""
+
+    def test_reads_the_pid_ghostty_returns(self):
+        with mock.patch.object(cockpit, "osascript", return_value="4242"):
+            self.assertEqual(cockpit.focused(), 4242)
+
+    def test_ghostty_not_in_front(self):
+        with mock.patch.object(cockpit, "osascript", return_value=""):
+            self.assertIsNone(cockpit.focused())
+
+    def test_a_failing_terminal_counts_as_not_looking(self):
+        with mock.patch.object(cockpit, "osascript", side_effect=RuntimeError("no windows")), mock.patch.object(cockpit, "log"):
+            self.assertIsNone(cockpit.focused())
+
+
 if __name__ == "__main__":
     unittest.main()

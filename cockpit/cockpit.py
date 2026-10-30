@@ -4,6 +4,7 @@
 Commands used by the menu bar app:
   serve                   print a JSON snapshot (one per line) whenever something changes
   focus PID               bring the session's terminal tab to the front
+  focused                 print the PID in the terminal tab in front of you, if any
   reply PID               type stdin into an idle session and press Enter
   clear PID               type /clear into an idle session: same tab, fresh conversation
   close PID               end an idle session (SIGTERM to that PID) and close its tab
@@ -733,6 +734,15 @@ end run
 
     KEY_NAMES = {"/": "slash", " ": "space", "-": "minus"}
 
+    FOCUSED = """
+if application id "com.mitchellh.ghostty" is running then
+  tell application id "com.mitchellh.ghostty"
+    if frontmost then return pid of focused terminal of selected tab of front window
+  end tell
+end if
+return ""
+"""
+
     CLOSE = """
 on run argv
   tell application id "com.mitchellh.ghostty"
@@ -784,6 +794,11 @@ end run
 
     def close(self, t):
         osascript(self.CLOSE, t["tab_id"], t["term_id"], "tab" if t["terms"] == 1 else "term")
+
+    def focused_pid(self):
+        """The foreground PID of the terminal in front of you, or None when Ghostty is not in front."""
+        out = osascript(self.FOCUSED)
+        return int(out) if out.isdigit() else None
 
 
 TERMINALS = [Ghostty()]
@@ -839,6 +854,19 @@ def terminal_for_pid(pid):
     if not t:
         raise RuntimeError("No terminal tab found for this session")
     return t
+
+
+def focused():
+    """The PID in the terminal tab you are looking at, if a terminal is in front."""
+    for adapter in TERMINALS:
+        try:
+            pid = adapter.focused_pid()
+        except Exception as exc:  # noqa: BLE001 - unknown means not looking
+            log(f"{type(adapter).__name__} focus check failed: {exc}")
+            continue
+        if pid:
+            return pid
+    return None
 
 
 def focus(pid):
@@ -1292,7 +1320,7 @@ def judge_now(prefix):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="cockpit.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("serve", "hook", "install-hooks", "uninstall-hooks", "hooks-status", "demo"):
+    for name in ("serve", "hook", "install-hooks", "uninstall-hooks", "hooks-status", "demo", "focused"):
         sub.add_parser(name)
     sub.add_parser("snapshot").add_argument("--no-judge", action="store_true")
     sub.add_parser("judge").add_argument("session_id")
@@ -1320,6 +1348,8 @@ def main(argv=None):
             print(json.dumps(demo_snapshot(), ensure_ascii=False, indent=1))
         elif args.cmd == "judge":
             print(json.dumps(judge_now(args.session_id), ensure_ascii=False, indent=1))
+        elif args.cmd == "focused":
+            print(focused() or "")
         elif args.cmd == "focus":
             focus(args.pid)
         elif args.cmd == "reply":

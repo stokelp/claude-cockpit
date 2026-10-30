@@ -26,6 +26,14 @@ Each card shows the session name (its first prompt while Claude Code still has a
 
 Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook with a full menu bar, macOS hides the newest icons behind the notch; the shortcut still works, and the panel then opens at the top right of the screen.
 
+**It opens by itself** when a session starts needing you, unless that session's tab is the one in front of you. It does not take the keyboard, so you can keep typing elsewhere; click anywhere else to close it. If it opened by itself, it closes again once nothing needs you. Turn this off in the gear menu (**Open when a session needs you**).
+
+To get the panel instead of Claude Code's own terminal notifications, add this to `~/.claude/settings.json` (hooks, and so the panel, keep working):
+
+```json
+"preferredNotifChannel": "notifications_disabled"
+```
+
 **Actions** (Ghostty only, see [Terminals](#terminals)):
 
 - Click a card to jump to its tab.
@@ -41,6 +49,7 @@ Open the panel from the icon, or with **⌃⌥⌘C** from anywhere. On a MacBook
 - **Permission prompts**: Claude Code marks the session `waiting` while one is on screen. A `Notification` hook also records which tool asked, when the transcript shows it, and clears it as soon as the tool call gets its result.
 - **The judge**: when a turn ends (`Stop` hook, or the app noticing an idle session that has no verdict yet), a detached `claude -p --model haiku` call reads the session's recent messages and returns a verdict, a one-line headline and the follow-ups. It runs once per finished turn, takes a few seconds, and never blocks the session. Verdicts are stored in `~/.claude/cockpit/state/`.
 - **Terminal tabs** are matched to sessions through Ghostty's AppleScript dictionary, by process ID and then by tty.
+- **Opening by itself**: the app opens the panel when a session enters **Needs you**. It first asks Ghostty which tab is in front, and stays closed if that is the session asking.
 
 The app itself is a small AppKit status item with a SwiftUI popover. The logic lives in [`cockpit/cockpit.py`](cockpit/cockpit.py), a single script that uses only the Python standard library and is bundled inside the app.
 
@@ -92,7 +101,7 @@ The judge sends the recent part of a finished session (your last prompts, Claude
 
 Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found, and Tell Claude, Continue and Clear are hidden. Close still ends the Claude process and leaves the tab open.
 
-Support for another terminal is one small class in `cockpit.py` (list terminals with their PID or tty, focus one, type into one, close one). Pull requests are welcome.
+Support for another terminal is one small class in `cockpit.py` (list terminals with their PID or tty, focus one, type into one, close one, tell which one is in front). Pull requests are welcome.
 
 ## Command line
 

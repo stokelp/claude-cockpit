@@ -10,6 +10,10 @@ final class Store: ObservableObject {
     @Published private(set) var openAtLogin = SMAppService.mainApp.status == .enabled
     @Published var toast: String?
     @Published var now = Date()
+    /// Open the panel by itself when a session starts needing you.
+    @Published var popsUp = UserDefaults.standard.object(forKey: "popsUp") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(popsUp, forKey: "popsUp") }
+    }
     /// Ticks clicked but not yet in a snapshot, so the box does not flicker back.
     @Published private var ticks: [String: Bool] = [:]
 
