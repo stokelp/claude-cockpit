@@ -302,7 +302,10 @@ class BusyCheckTest(unittest.TestCase):
     def setUp(self):
         self.notes, self.logs = [], []
         self.claude = []
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.patches = [
+            mock.patch.object(cockpit, "DATA_DIR", Path(self.tmp.name) / "cockpit"),  # the restart lock
             mock.patch.object(restart, "restart_running", lambda *a: False),
             mock.patch.object(restart, "process_table", lambda: {}),
             mock.patch.object(restart, "ghostty_pid", lambda table: 1),
@@ -354,6 +357,63 @@ class BusyCheckTest(unittest.TestCase):
             restart.spawn_restart(force=False, spare=[41, 42])
             self.assertEqual(popen.call_args.kwargs["env"][restart.SPARE_ENV], "41,42")
             self.assertNotIn("--force", popen.call_args.args[0])
+
+
+class LockTest(unittest.TestCase):
+    """One restart or restore at a time: two asked one second apart ended five sessions (2026-11-03)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for p in (
+            mock.patch.object(cockpit, "DATA_DIR", Path(self.tmp.name) / "cockpit"),
+            mock.patch.object(cockpit, "log", lambda *a: None),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_second_restart_stops_before_reading_ghostty(self):
+        fd = restart.take_lock()
+        self.addCleanup(os.close, fd)
+        with mock.patch.object(restart, "process_table") as table, mock.patch.object(restart, "read_layout") as layout:
+            with self.assertRaisesRegex(RuntimeError, "already restarting"):
+                restart.restart(force=True)
+            with self.assertRaisesRegex(RuntimeError, "already restarting"):
+                restart.restore()
+        table.assert_not_called()
+        layout.assert_not_called()
+
+    def test_the_lock_is_released_after_a_failed_restart(self):
+        with mock.patch.object(restart, "_restart", side_effect=RuntimeError("boom")), self.assertRaisesRegex(RuntimeError, "boom"):
+            restart.restart()
+        fd = restart.take_lock()
+        self.assertIsNotNone(fd)
+        os.close(fd)
+
+    def test_a_restart_in_another_process_holds_it(self):
+        lock = restart._path(restart.LOCK_NAME)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        hold = "import fcntl, os, sys, time; fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); fcntl.flock(fd, fcntl.LOCK_EX); print('held', flush=True); time.sleep(10)"
+        child = subprocess.Popen([sys.executable, "-c", hold, str(lock)], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertEqual(child.stdout.readline().strip(), "held")
+        self.assertIsNone(restart.take_lock())
+        child.kill()
+        child.wait()
+        fd = restart.take_lock()  # dropped with the process
+        self.assertIsNotNone(fd)
+        os.close(fd)
+
+    def test_launch_never_claims_the_windows_of_a_ghostty_already_running(self):
+        with (
+            mock.patch.object(restart, "process_table", lambda: {}),
+            mock.patch.object(restart, "ghostty_pid", lambda table: 123),
+            mock.patch.object(subprocess, "run"),
+            mock.patch.object(restart, "window_ids") as ids,
+        ):
+            self.assertEqual(restart.launch_fresh(), [])
+        ids.assert_not_called()
 
 
 if __name__ == "__main__":

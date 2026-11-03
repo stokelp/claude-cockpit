@@ -46,6 +46,7 @@ EXE_SUFFIX = ".app/Contents/MacOS/ghostty"
 STATE_NAME = "ghostty-restart.json"  # the last restart: running, when, result
 REQUEST_NAME = "ghostty-restart-request.json"  # asks `serve` to restart (from inside Ghostty)
 PLAN_NAME = "ghostty-restart-plan.json"  # the layout of the last restart, for --restore
+LOCK_NAME = "ghostty-restart.lock"  # flock held by the one restart or restore running
 
 CHECK_EVERY = 5.0  # seconds between scans for deleted programs
 SETTLED = 10.0  # a deleted program must be seen this long before an automatic restart
@@ -109,6 +110,39 @@ def restart_running(state=None, now=None):
     state = load_state() if state is None else state
     now = time.time() if now is None else now
     return bool(state.get("running") and cp.alive(state.get("pid")) and now - state.get("started", 0) < RUNNING_FOR)
+
+
+def take_lock():
+    """An exclusive lock held for a whole restart or restore, or None when another one holds it.
+
+    restart_running() alone let two restarts through on 2026-11-03: asked one second apart, both
+    were still reading the layout, before either saved its state. The second planned a Ghostty
+    whose sessions the first had already ended, then closed the window the first had just rebuilt
+    as one of its own: five resumed sessions died. The kernel drops the lock when the process
+    ends, crash included.
+    """
+    import fcntl
+
+    _path(LOCK_NAME).parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(_path(LOCK_NAME), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def locked(run):
+    """Runs `run()` under the restart lock; refuses at once while another restart holds it."""
+    fd = take_lock()
+    if fd is None:
+        cp.log("ghostty restart skipped: another one is running")
+        raise RuntimeError("Ghostty is already restarting")
+    try:
+        return run()
+    finally:
+        os.close(fd)
 
 
 # --------------------------------------------------------------------- processes
@@ -549,7 +583,10 @@ def quit_ghostty(pid):
 
 def launch_fresh():
     """Opens Ghostty without restoring its windows; returns the ids of the windows it opens by itself."""
+    already = ghostty_pid(process_table())
     subprocess.run(["open", "-F", "-b", BUNDLE], check=True, timeout=30, env=launch_env())
+    if already:  # relaunched by someone else meanwhile: its windows are not ours to close
+        return []
     deadline = time.time() + 20
     while time.time() < deadline:
         try:
@@ -574,6 +611,10 @@ def plural(n, word):
 
 
 def restart(force=False, auto=False, spare=None):
+    return locked(lambda: _restart(force, auto, spare))
+
+
+def _restart(force, auto, spare):
     requested = SPARE_ENV in os.environ
     if spare is None:
         spare = {int(p) for p in os.environ.get(SPARE_ENV, "").split(",") if p.isdigit()}
@@ -629,6 +670,10 @@ def restart(force=False, auto=False, spare=None):
 
 def restore():
     """Rebuilds the tabs of the last restart (after a failed one), next to the windows open now."""
+    return locked(_restore)
+
+
+def _restore():
     try:
         plan = json.loads(_path(PLAN_NAME).read_text())["windows"]
     except (OSError, ValueError, KeyError):
