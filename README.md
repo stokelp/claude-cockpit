@@ -100,6 +100,8 @@ If you use `CLAUDE_CONFIG_DIR`, the hook follows it. The app only sees it if it 
 
 The judge sends the recent part of a finished session (your last prompts, Claude's last replies, a list of recent tool actions) to Claude through your own `claude` CLI login, the same way your sessions do. It makes one Haiku call per finished turn. Nothing else leaves your machine, and nothing is sent anywhere but Anthropic. Set `"judge": false` to make no calls at all.
 
+With Stokelp's usage guard installed (`~/.claude/stokelp/usage.py`, from the stokelp Claude Code plugin's status line), each judge call's cost is added to its weekly usage ledger, since a headless call has no status line to record it.
+
 ## Terminals
 
 Ghostty is the only terminal with actions today. In any other terminal, or an editor's built-in terminal, sessions still appear with their group, headline and follow-ups, but clicking a card only reports that no tab was found, and Tell Claude, Continue and Clear are hidden. Close still ends the Claude process and leaves the tab open.
