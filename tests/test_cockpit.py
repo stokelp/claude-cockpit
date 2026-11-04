@@ -315,6 +315,60 @@ class Checklist(Sandbox):
         self.assertEqual(checked[-1], f"item {cockpit.MAX_CHECKED + 4}")
 
 
+class JudgeCost(unittest.TestCase):
+    """The judge runs with --output-format json and hands its cost to the stokelp usage guard."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.usage = self.tmp / "usage.py"
+        self.calls = []
+        self.output = ""
+
+    def run_fake(self, args, **kw):
+        self.calls.append(args)
+        if "record-cost" in args:
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        return mock.Mock(returncode=0, stdout=self.output, stderr="")
+
+    def ask(self, output, installed=True):
+        self.output = output
+        if installed:
+            self.usage.write_text("")
+        with (
+            mock.patch.object(cockpit, "USAGE_SCRIPT", self.usage),
+            mock.patch.object(cockpit, "find_executable", lambda name: "/bin/claude"),
+            mock.patch.object(cockpit, "DATA_DIR", self.tmp),
+            mock.patch.object(cockpit, "LOG_FILE", self.tmp / "cockpit.log"),
+            mock.patch.object(cockpit.subprocess, "run", self.run_fake),
+        ):
+            try:
+                return cockpit.ask_model("ctx", dict(cockpit.DEFAULT_CONFIG))
+            except RuntimeError:
+                return None
+
+    def recorded(self):
+        return [c[-1] for c in self.calls if "record-cost" in c]
+
+    def test_answer_and_cost(self):
+        out = json.dumps({"is_error": False, "total_cost_usd": 0.0031, "result": '{"verdict": "done"}'})
+        self.assertEqual(self.ask(out), {"verdict": "done"})
+        self.assertIn("--output-format", self.calls[0])
+        self.assertEqual(self.recorded(), ["0.0031"])
+
+    def test_failed_call_still_records_its_cost(self):
+        self.assertIsNone(self.ask(json.dumps({"is_error": True, "total_cost_usd": 0.001, "result": "{}"})))
+        self.assertEqual(self.recorded(), ["0.001"])
+
+    def test_nothing_sent_without_the_usage_guard(self):
+        out = json.dumps({"total_cost_usd": 0.002, "result": '{"verdict": "done"}'})
+        self.assertEqual(self.ask(out, installed=False), {"verdict": "done"})
+        self.assertEqual(self.recorded(), [])
+
+    def test_unreadable_output_fails(self):
+        self.assertIsNone(self.ask("not json {}"))
+        self.assertEqual(self.recorded(), [])
+
+
 class Verdicts(unittest.TestCase):
     def test_unknown_verdict_becomes_done(self):
         self.assertEqual(cockpit.clean_verdict({"verdict": "maybe"})["verdict"], "done")

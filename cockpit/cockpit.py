@@ -64,6 +64,9 @@ DATA_DIR = CLAUDE_DIR / "cockpit"
 STATE_DIR = DATA_DIR / "state"
 LOG_FILE = DATA_DIR / "cockpit.log"
 CONFIG_FILE = DATA_DIR / "config.json"
+# Stokelp's weekly usage guard (stokelp/claude plugin, team status line): the judge hands it its
+# cost, since a headless run has no status line to record it. Absent elsewhere: nothing is sent.
+USAGE_SCRIPT = CLAUDE_DIR / "stokelp" / "usage.py"
 
 DEFAULT_CONFIG = {
     "judge": True,  # False: no model calls, finished sessions land in "done"
@@ -487,6 +490,8 @@ def ask_model(context, cfg):
             "--tools",
             "",
             "--disable-slash-commands",
+            "--output-format",
+            "json",
             "--system-prompt",
             JUDGE_PROMPT.replace("{language}", str(cfg["language"])),
         ],
@@ -497,10 +502,32 @@ def ask_model(context, cfg):
         cwd=DATA_DIR,
         env={**os.environ, "CLAUDE_COCKPIT_CHILD": "1"},
     )
-    match = re.search(r"\{.*\}", result.stdout, re.S)
-    if result.returncode != 0 or not match:
+    try:
+        out = json.loads(result.stdout)
+    except ValueError:
+        out = None
+    out = out if isinstance(out, dict) else {}
+    record_cost(out.get("total_cost_usd"))  # spent even when the answer is unusable
+    answer = out.get("result") if isinstance(out.get("result"), str) else ""
+    match = re.search(r"\{.*\}", answer, re.S)
+    if result.returncode != 0 or out.get("is_error") or not match:
         raise RuntimeError(f"claude -p exit {result.returncode}: {(result.stdout + result.stderr)[-300:]!r}")
     return json.loads(match.group(0))
+
+
+def record_cost(usd):
+    """Hand the judge's cost to the stokelp usage guard, when it is installed."""
+    if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0 or not USAGE_SCRIPT.exists():
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(USAGE_SCRIPT), "record-cost", repr(float(usd))],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"record-cost failed: {exc!r}")
 
 
 def clean_verdict(answer):
